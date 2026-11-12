@@ -80,7 +80,7 @@ npx wrangler d1 migrations apply news-agent --remote
 
 ### 6. 试跑
 
-**Actions → news-pipeline → Run workflow**。勾选 `force_digest` 可以立即收到一份日报，确认整条链路是通的。之后它会每 30 分钟自动跑一次。
+**Actions → news-pipeline → Run workflow**。勾选 `force_digest` 可以立即收到一份日报，确认整条链路是通的。部署好第 7 步的 Worker 后，由 Worker 每 30 分钟准点触发；workflow 自带的定时任务只是每 6 小时一次的备份。（如果不部署 Worker，请把 `pipeline.yml` 里的 cron 改回 `7,37 * * * *`。）
 
 > GitHub 自带的定时任务高峰期会延迟 10–30 分钟；公开仓库 60 天没有提交，定时任务还会被自动停用。第 7 步部署的 Worker 会用 Cloudflare Cron Trigger 准点触发，解决这两个问题。
 

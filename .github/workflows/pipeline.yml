@@ -2,8 +2,9 @@ name: news-pipeline
 
 on:
   schedule:
-    # 每 30 分钟一次。避开整点（整点 GitHub 定时任务最拥挤，延迟最大）
-    - cron: "7,37 * * * *"
+    # 备份触发：平时由 Cloudflare Worker 的 Cron Trigger 每 30 分钟调用 workflow_dispatch（准点、不会被停用）。
+    # 这里每 6 小时兜底一次，防止 Worker 或 GITHUB_TOKEN 出问题时流水线完全停掉。
+    - cron: "17 */6 * * *"
   workflow_dispatch:
     inputs:
       stage:
