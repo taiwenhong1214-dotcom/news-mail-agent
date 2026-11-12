@@ -8,7 +8,8 @@ export interface Env {
   LLM_API_KEY: string;
   TAVILY_API_KEY?: string;
   GITHUB_TOKEN?: string;
-  GOOGLE_VISION_API_KEY?: string;  // 可选：Cloud Vision Web Detection，以图搜图找出处           // fine-grained PAT，Actions: Read and write
+  GOOGLE_VISION_API_KEY?: string;
+  CHECK_TOKEN?: string;            // 可选：/check 一键核实接口的访问令牌（手机快捷指令用）  // 可选：Cloud Vision Web Detection，以图搜图找出处           // fine-grained PAT，Actions: Read and write
 
   // vars（wrangler.toml）
   LLM_BASE_URL?: string;

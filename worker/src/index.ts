@@ -1,4 +1,5 @@
 import { loadHistory, runAgent, saveTurn } from "./agent";
+import { handleCheck } from "./check";
 import { handleCommand } from "./commands";
 import type { Env } from "./env";
 import { dispatchPipeline } from "./github";
@@ -56,6 +57,16 @@ export function allowedChatIds(env: Env): Set<number> {
   );
 }
 
+export function makeLLM(env: Env, deps: Pick<Deps, "fetchImpl">): LLM {
+  return new LLM({
+    baseUrl: env.LLM_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai/",
+    apiKey: env.LLM_API_KEY,
+    models: [env.CHAT_MODEL || "gemini-2.5-flash", ...(env.CHAT_FALLBACK_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean)],
+    reasoningEffort: env.CHAT_REASONING_EFFORT,
+    fetchImpl: deps.fetchImpl,
+  });
+}
+
 export async function handleWebhook(req: Request, env: Env, deps: Deps = defaultDeps): Promise<Response> {
   const secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token") ?? "";
   const expected = webhookSecret(env);
@@ -96,13 +107,7 @@ export async function handleWebhook(req: Request, env: Env, deps: Deps = default
       const bytes = await tg.downloadFile(imageRef.fileId, MAX_IMAGE_BYTES);
       image = { mime: imageRef.mime, base64: bytesToBase64(bytes) };
     }
-    const llm = new LLM({
-      baseUrl: env.LLM_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai/",
-      apiKey: env.LLM_API_KEY,
-      models: [env.CHAT_MODEL || "gemini-2.5-flash", ...(env.CHAT_FALLBACK_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean)],
-      reasoningEffort: env.CHAT_REASONING_EFFORT,
-      fetchImpl: deps.fetchImpl,
-    });
+    const llm = makeLLM(env, deps);
     const history = await loadHistory(env.DB, chatId);
     const { reply } = await runAgent(text, {
       llm,
@@ -156,9 +161,10 @@ export async function handleCron(env: Env, deps: Deps = defaultDeps): Promise<vo
 }
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const { pathname } = new URL(req.url);
     if (req.method === "POST" && pathname === "/telegram") return handleWebhook(req, env);
+    if (req.method === "POST" && pathname === "/check") return handleCheck(req, env, defaultDeps, (p) => ctx.waitUntil(p));
     if (req.method === "GET" && pathname === "/setup") return handleSetup(req, env);
     if (req.method === "GET" && pathname === "/") return new Response("news-agent ok");
     return new Response("not found", { status: 404 });

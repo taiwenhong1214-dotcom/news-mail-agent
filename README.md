@@ -105,6 +105,7 @@ npx wrangler secret put LLM_API_KEY               # Gemini key
 npx wrangler secret put TAVILY_API_KEY
 npx wrangler secret put GITHUB_TOKEN
 npx wrangler secret put GOOGLE_VISION_API_KEY     # 可选
+npx wrangler secret put CHECK_TOKEN               # 可选：一键核实用，再生成一个随机字符串
 
 npx wrangler deploy                               # 输出里有 Worker 地址：https://news-agent.<你的子域>.workers.dev
 ```
@@ -116,6 +117,7 @@ Worker 的非敏感配置（对话模型、仓库名等）在 `worker/wrangler.t
 **Bot 用法**：直接用中文提问，例如「今天有什么大事」「最近 AI 基础设施有什么新闻」「搜一下马来西亚数据中心招聘」「屏蔽 crypto」「把 https://xxx/feed 加到 DevOps」。
 
 - **实时搜索**：说「搜一下 / 查一下 / 最新」就会联网搜（Tavily），会按需限定时间范围，并用 `read_page` 打开 1–2 个结果读全文再回答。直接发链接也能读。
+- **核实**：发截图或转发一段话，配文「核实」或「是真的吗」，会逐条查证并给出结论和来源。刷帖时想一个手势就核实，见第 8 步。
 - **发图片**：识别图里的内容（人物、地点、产品、截图文字），问出处时用 Cloud Vision 以图搜图，列出含有相同图片的网页，再联网核实。可以给图片加文字说明你想问什么；不加的话默认问「这是什么、出处在哪」。请以「照片」方式发送（上限 1.5MB）。
 
 快捷命令：
@@ -127,6 +129,39 @@ Worker 的非敏感配置（对话模型、仓库名等）在 `worker/wrangler.t
 | `/status` | 上次运行情况、待打分积压 |
 | `/settings` | 对话里添加的信源和屏蔽词 |
 | `/reset` | 清空对话记忆（默认保留最近 20 轮） |
+
+### 8. 刷帖时一键核实（可选）
+
+Worker 提供 `POST /check`：收到截图或文字，自动挑出能核实的说法逐条联网查证，结论（✅ 属实 / ❌ 不实 / ⚠️ 误导 / ❓ 无法核实）配来源链接，发到 Telegram，同时作为返回值，手机可以直接弹通知显示。核实一般要 15–40 秒。
+
+> Facebook 帖子链接要登录才能看，bot 读不到，所以走截图。
+
+**iPhone（快捷指令 + 轻点背面，一个手势）**
+
+在「快捷指令」App 新建一个快捷指令，依次加这些操作：
+
+1. **截屏**
+2. **调整图像大小**：宽度 1080
+3. **转换图像**：转换为 JPEG，质量调到 0.7 左右（iPhone 截图是 PNG，常常 2–3MB，超过 1.5MB 上限）
+4. **获取 URL 内容**：URL 填 `https://news-agent.<你的子域>.workers.dev/check`，方法 POST；头部加 `Authorization` = `Bearer <CHECK_TOKEN>` 和 `Content-Type` = `image/jpeg`；请求体选「文件」，选上一步的图像
+5. **显示通知**：内容选「URL 的内容」
+
+然后打开 **设置 → 辅助功能 → 触控 → 轻点背面 → 轻点两下**，选这个快捷指令。iPhone 15 Pro 及以后的机型也可以绑到操作按钮。以后刷到可疑的帖子，轻点两下手机背面，过一会儿通知里就有结论；完整结果在 Telegram，还能接着追问。
+
+想加问题的话，在 URL 后面拼上 `?q=这个优惠是真的吗`（可以在快捷指令里先加一个「要求输入」）。
+
+**Android**
+
+- 用 [HTTP Shortcuts](https://http-shortcuts.rmy.ch/) App 新建一个快捷方式：方法 POST，URL 同上，请求头加 `Authorization: Bearer <CHECK_TOKEN>`，请求体选「文件」，勾选允许从分享菜单接收文件，响应显示方式选「对话框」。截屏后在预览里点 **分享 → HTTP Shortcuts**，不用离开 Facebook。
+- 更省事的办法：直接把截图分享给 Telegram 里的 bot，配文「核实」。用过几次后，Android 的分享菜单会把这个对话置顶。
+
+**测试**
+
+```bash
+curl -X POST "https://news-agent.<你的子域>.workers.dev/check" \
+  -H "Authorization: Bearer <CHECK_TOKEN>" -H "Content-Type: text/plain" \
+  --data "马来西亚政府宣布明天全国公共假期"
+```
 
 ## 本地开发
 
@@ -188,6 +223,7 @@ pipeline/nma/       Python 流水线
   db.py             D1 HTTP API / SQLite
 worker/src/         Cloudflare Worker（TypeScript）
   index.ts          webhook / setup / cron 入口
+  check.ts          /check 一键核实入口（手机快捷指令用）
   agent.ts          function calling 循环、对话历史
   tools.ts          search_news、top_news、get_digest、web_search、read_page、reverse_image_search、add_feed 等工具
   commands.ts       /digest /run /status 等命令
