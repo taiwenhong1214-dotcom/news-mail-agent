@@ -6,7 +6,7 @@
 |---|---|---|
 | 1 | 新闻流水线（GitHub Actions + D1 + Telegram 推送） | ✅ 完成 |
 | 2 | 邮件（Gmail / Outlook） | ⏸ 暂不做 |
-| 3 | 对话 Worker（Cloudflare Workers + function calling） | 待做 |
+| 3 | 对话 Worker（Cloudflare Workers + function calling） | ✅ 完成 |
 
 已确认的决定：公开仓库、每 30 分钟一次；LLM 用 Gemini（OpenAI 兼容接口）；实时搜索用 Tavily；领域共 10 组（见 `config/feeds.yaml`）。
 
@@ -66,9 +66,11 @@ LLM 客户端：主模型 `gemini-3.5-flash-lite`，过载（429/5xx）或不存
 | 公开仓库日志 | 只打统计数字和信源名 | Actions 日志任何人都能看 |
 | 退出码 | 0 正常 / 2 出错但已告警 / 1 崩溃（workflow 兜底告警） | 避免重复告警 |
 
-## 4. 阶段 3 待办
+## 4. 对话 Worker（阶段 3）
 
-- Worker：webhook（校验 `X-Telegram-Bot-Api-Secret-Token`、chat_id 白名单、`update_id` 去重）、function calling（最多 4 轮）、对话历史裁剪到 20 轮
-- 工具：`search_news`（FTS，查询词少于 3 个字时退回 LIKE）、`get_digest`、`web_search`（Tavily）、`add_feed`、`mute_keyword`
-- Cron Trigger 每 30 分钟调用 GitHub `workflow_dispatch`（需要 fine-grained PAT，权限 `actions:write`），替代 GitHub 自带的 schedule：后者常延迟，公开仓库 60 天无提交还会被停用
-- Workers 免费版限制：每次请求 CPU 10ms（等待网络不算）、子请求 50 个
+- **入口**：`POST /telegram`（校验 `X-Telegram-Bot-Api-Secret-Token`，chat_id 白名单，`update_id` 去重）；`GET /setup?secret=` 一键设置 webhook；Cron `7,37 * * * *` 触发 GitHub `workflow_dispatch`，失败时最多每 6 小时告警一次（`app_state` 表节流）
+- **命令**（不经过 LLM）：`/digest` `/run` `/status` `/settings` `/reset` `/help`
+- **工具**：`search_news`（FTS trigram；少于 3 个字的词走 LIKE；先 AND，没结果再 OR）、`top_news`、`get_digest`、`web_search`（Tavily）、`add_feed`（先抓取验证是 RSS/Atom）、`remove_feed`、`mute_keyword`、`unmute_keyword`、`list_settings`
+- **对话**：`gemini-2.5-flash` 为主，备用 `gemini-3.1-flash-lite`、`gemini-3.5-flash-lite`；最多 4 轮工具调用，用完后强制给出回答；历史只存用户消息和最终回复，保留 20 轮
+- **Gemini thought signature**：Gemini 3 要求回传工具调用的签名，代码会原样保留服务商返回的附加字段。中途换模型时，旧模型发起的调用没有签名，遇到 400 时补上官方占位签名再重试
+- **Workers 免费版限制**：每次请求 CPU 10ms（等待网络不算），一条消息的子请求约 10–20 个（上限 50）。处理在请求内同步完成，Telegram 超时重发由 `update_id` 去重

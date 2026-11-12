@@ -1,5 +1,5 @@
-# 阶段 1 只用来建库和跑 migration；Worker 代码在阶段 3 加上。
 name = "news-agent"
+main = "src/index.ts"
 compatibility_date = "2026-10-01"
 
 [[d1_databases]]
@@ -7,3 +7,21 @@ binding = "DB"
 database_name = "news-agent"
 database_id = "07f799ca-fa73-497c-a553-cde19b56f71b"   # npx wrangler d1 create news-agent 输出的 id
 migrations_dir = "../migrations"
+
+# prompts/*.md 作为字符串打包进 Worker
+[[rules]]
+type = "Text"
+globs = ["**/*.md"]
+fallthrough = true
+
+# 每 30 分钟触发一次 GitHub Actions 流水线（避开整点；没配 GITHUB_TOKEN 时自动跳过）
+[triggers]
+crons = ["7,37 * * * *"]
+
+# 非敏感配置。密钥用 `npx wrangler secret put <NAME>` 设置，见 README
+[vars]
+LLM_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+CHAT_MODEL = "gemini-2.5-flash"
+CHAT_FALLBACK_MODELS = "gemini-3.1-flash-lite,gemini-3.5-flash-lite"
+GITHUB_REPO = "taiwenhong1214-dotcom/news-mail-agent"
+GITHUB_WORKFLOW = "pipeline.yml"
