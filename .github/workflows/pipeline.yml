@@ -52,11 +52,20 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          # 以下可在仓库 Settings → Variables 里覆盖，不设就用代码默认值
+          # 以下可在仓库 Settings → Secrets and variables → Actions → Variables 里设置，
+          # 不设就用代码默认值（见 .env.example）。改了下次运行就生效，不用推送代码
           LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
           LLM_FALLBACK_MODELS: ${{ vars.LLM_FALLBACK_MODELS }}
+          LLM_REASONING_EFFORT: ${{ vars.LLM_REASONING_EFFORT }}
+          WINDOW_HOURS: ${{ vars.WINDOW_HOURS }}
+          SIMHASH_DISTANCE: ${{ vars.SIMHASH_DISTANCE }}
+          SIMHASH_WINDOW_HOURS: ${{ vars.SIMHASH_WINDOW_HOURS }}
+          MAX_SCORE_BATCHES: ${{ vars.MAX_SCORE_BATCHES }}
           PUSH_THRESHOLD: ${{ vars.PUSH_THRESHOLD }}
+          PUSH_MAX_PER_RUN: ${{ vars.PUSH_MAX_PER_RUN }}
+          PUSH_MAX_AGE_HOURS: ${{ vars.PUSH_MAX_AGE_HOURS }}
+          DIGEST_HOUR_MYT: ${{ vars.DIGEST_HOUR_MYT }}
         run: |
           set +e
           args="${{ inputs.stage || 'all' }}"

@@ -76,7 +76,7 @@ npx wrangler d1 migrations apply news-agent --remote
 | `TELEGRAM_CHAT_ID` | 你的 chat_id |
 | `LLM_API_KEY` | Gemini API key |
 
-可选的 **Variables**（不设就用默认值）：`LLM_MODEL`、`LLM_FALLBACK_MODELS`、`LLM_BASE_URL`、`PUSH_THRESHOLD`。
+可选的 **Variables**（同一页面的 Variables 标签；不设就用默认值，完整列表和默认值见 `.env.example`）：`MAX_SCORE_BATCHES`、`PUSH_THRESHOLD`、`PUSH_MAX_PER_RUN`、`PUSH_MAX_AGE_HOURS`、`DIGEST_HOUR_MYT`、`WINDOW_HOURS`、`SIMHASH_DISTANCE`、`SIMHASH_WINDOW_HOURS`、`LLM_MODEL`、`LLM_FALLBACK_MODELS`、`LLM_BASE_URL`、`LLM_REASONING_EFFORT`。改了下次运行就生效，不用推送代码。
 
 ### 6. 试跑
 
