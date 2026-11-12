@@ -55,7 +55,7 @@ export class Telegram {
   constructor(
     private token: string,
     private dryRun = false,
-    private fetchImpl: typeof fetch = fetch,
+    private fetchImpl: typeof fetch = (...a) => fetch(...a), // 不能直接存 fetch：Workers 里会报 Illegal invocation
   ) {}
 
   private async call(method: string, body: unknown): Promise<Response | null> {

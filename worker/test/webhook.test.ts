@@ -45,6 +45,13 @@ describe("webhook", () => {
     expect(f.calls.length).toBe(0);
   });
 
+  it("tolerates whitespace around the stored secret", async () => {
+    const f = routes();
+    const env = makeEnv(new FakeD1(), { TELEGRAM_WEBHOOK_SECRET: "  s3cret\r\n" });
+    const r = await handleWebhook(req(update(2, 999, "hi")), env, { fetchImpl: f.impl, now: () => NOW });
+    expect(r.status).toBe(200);
+  });
+
   it("ignores chats not in whitelist", async () => {
     const f = routes();
     const db = new FakeD1();

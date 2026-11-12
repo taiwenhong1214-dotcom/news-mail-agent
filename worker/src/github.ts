@@ -4,7 +4,7 @@ import type { Env } from "./env";
 export async function dispatchPipeline(
   env: Env,
   inputs: Record<string, string> = {},
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = (...a) => fetch(...a),
 ): Promise<string | null> {
   if (!env.GITHUB_TOKEN || !env.GITHUB_REPO) return "未配置 GITHUB_TOKEN / GITHUB_REPO";
   const workflow = env.GITHUB_WORKFLOW || "pipeline.yml";

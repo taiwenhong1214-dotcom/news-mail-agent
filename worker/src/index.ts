@@ -18,6 +18,11 @@ export interface Deps {
 
 const defaultDeps: Deps = { fetchImpl: (...a) => fetch(...a), now: nowSec };
 
+/** 去掉首尾空白：wrangler secret put 粘贴时容易带上空格或换行 */
+export function webhookSecret(env: Env): string {
+  return (env.TELEGRAM_WEBHOOK_SECRET || "").trim();
+}
+
 export function allowedChatIds(env: Env): Set<number> {
   return new Set(
     (env.ALLOWED_CHAT_IDS || "")
@@ -29,7 +34,8 @@ export function allowedChatIds(env: Env): Set<number> {
 
 export async function handleWebhook(req: Request, env: Env, deps: Deps = defaultDeps): Promise<Response> {
   const secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token") ?? "";
-  if (!env.TELEGRAM_WEBHOOK_SECRET || !safeEqual(secret, env.TELEGRAM_WEBHOOK_SECRET)) {
+  const expected = webhookSecret(env);
+  if (!expected || !safeEqual(secret, expected)) {
     return new Response("unauthorized", { status: 401 });
   }
   let update: TgUpdate;
@@ -87,11 +93,12 @@ export async function handleWebhook(req: Request, env: Env, deps: Deps = default
 /** 一次性设置 webhook：浏览器打开 https://<worker>/setup?secret=<TELEGRAM_WEBHOOK_SECRET> */
 async function handleSetup(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
-  if (!env.TELEGRAM_WEBHOOK_SECRET || !safeEqual(url.searchParams.get("secret") ?? "", env.TELEGRAM_WEBHOOK_SECRET)) {
+  const expected = webhookSecret(env);
+  if (!expected || !safeEqual((url.searchParams.get("secret") ?? "").trim(), expected)) {
     return new Response("unauthorized", { status: 401 });
   }
   const tg = new Telegram(env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_DRY_RUN === "1");
-  const result = await tg.setWebhook(`${url.origin}/telegram`, env.TELEGRAM_WEBHOOK_SECRET);
+  const result = await tg.setWebhook(`${url.origin}/telegram`, expected);
   return Response.json({ webhook: `${url.origin}/telegram`, telegram: result });
 }
 

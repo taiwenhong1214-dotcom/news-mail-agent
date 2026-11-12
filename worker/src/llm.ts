@@ -65,7 +65,7 @@ export class LLM {
     this.url = opts.baseUrl.replace(/\/+$/, "") + "/chat/completions";
     this.reasoningEffort = opts.reasoningEffort || undefined;
     this.retries = opts.retries ?? 2;
-    this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.fetchImpl = opts.fetchImpl ?? ((...a) => fetch(...a)); // 直接存 fetch 再当方法调用，Workers 会报 Illegal invocation
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
