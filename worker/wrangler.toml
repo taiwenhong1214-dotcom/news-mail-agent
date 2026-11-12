@@ -5,5 +5,5 @@ compatibility_date = "2026-10-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "news-agent"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"   # npx wrangler d1 create news-agent 输出的 id
+database_id = "07f799ca-fa73-497c-a553-cde19b56f71b"   # npx wrangler d1 create news-agent 输出的 id
 migrations_dir = "../migrations"

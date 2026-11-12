@@ -64,7 +64,8 @@ npx wrangler d1 migrations apply news-agent --remote
 
 ### 5. GitHub Secrets
 
-仓库 **Settings → Secrets and variables → Actions**：
+仓库 **Settings → Secrets and variables → Actions → Secrets**，用页面下半部分的 **New repository secret** 按钮添加。
+⚠️ 要加在 **Repository secrets**，不是上面的 Environment secrets（workflow 没有声明 environment，读不到那里的值）。每个 secret 的 Name 填下表左列，Secret 填对应的值：
 
 | Secret | 值 |
 |---|---|
