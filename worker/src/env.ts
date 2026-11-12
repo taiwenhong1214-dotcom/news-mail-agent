@@ -7,7 +7,8 @@ export interface Env {
   ALLOWED_CHAT_IDS: string;        // 逗号分隔的白名单 chat_id
   LLM_API_KEY: string;
   TAVILY_API_KEY?: string;
-  GITHUB_TOKEN?: string;           // fine-grained PAT，Actions: Read and write
+  GITHUB_TOKEN?: string;
+  GOOGLE_VISION_API_KEY?: string;  // 可选：Cloud Vision Web Detection，以图搜图找出处           // fine-grained PAT，Actions: Read and write
 
   // vars（wrangler.toml）
   LLM_BASE_URL?: string;

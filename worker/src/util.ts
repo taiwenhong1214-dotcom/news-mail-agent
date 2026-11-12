@@ -58,3 +58,32 @@ export function safeEqual(a: string, b: string): boolean {
   }
   return diff === 0;
 }
+
+const B64 = new TextEncoder().encode("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/");
+
+/** 字节 → base64。优先用原生 Uint8Array.toBase64（ES2026）；没有时查表写进字节数组，最后一次性解码。
+ *  不用 String.fromCharCode + btoa 或字符串拼接：300KB 图片要 14-19ms CPU，超过 Workers 免费版 10ms 上限 */
+export function bytesToBase64(bytes: Uint8Array): string {
+  const native = (bytes as Uint8Array & { toBase64?: () => string }).toBase64;
+  if (typeof native === "function") return native.call(bytes);
+  const len = bytes.length;
+  const out = new Uint8Array(Math.ceil(len / 3) * 4);
+  let o = 0;
+  let i = 0;
+  for (; i + 2 < len; i += 3) {
+    const n = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
+    out[o++] = B64[n >> 18];
+    out[o++] = B64[(n >> 12) & 63];
+    out[o++] = B64[(n >> 6) & 63];
+    out[o++] = B64[n & 63];
+  }
+  if (i < len) {
+    const two = i + 1 < len;
+    const n = (bytes[i] << 16) | ((two ? bytes[i + 1] : 0) << 8);
+    out[o++] = B64[n >> 18];
+    out[o++] = B64[(n >> 12) & 63];
+    out[o++] = two ? B64[(n >> 6) & 63] : 61; // "="
+    out[o++] = 61;
+  }
+  return new TextDecoder().decode(out);
+}

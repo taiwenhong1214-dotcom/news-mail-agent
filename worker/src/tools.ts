@@ -1,12 +1,14 @@
 import { GROUPS, TOOL_RESULT_MAX_CHARS } from "./config";
 import type { Env } from "./env";
 import type { ToolDef } from "./llm";
-import { fmtMyt, htmlToText, mytDate, truncate } from "./util";
+import { fmtMyt, htmlToText, mytDate, truncate, unescapeHtml } from "./util";
 
 export interface ToolContext {
   env: Env;
   now: number;
   fetchImpl: typeof fetch;
+  /** 用户这条消息附带的图片（base64，不含 data: 前缀） */
+  image?: { mime: string; base64: string };
 }
 
 const groupKeys = Object.keys(GROUPS);
@@ -63,15 +65,30 @@ export const TOOL_DEFS: ToolDef[] = [
     type: "function",
     function: {
       name: "web_search",
-      description: "联网实时搜索（Tavily）。新闻库里没有、需要最新信息或背景知识时使用。",
+      description:
+        "联网实时搜索（Tavily）。用户说「搜一下」「查一下」「最新」、新闻库里没有、或需要背景知识时使用。" +
+        "问最新进展时设 time_range；结果只有摘要片段，需要细节时再用 read_page 打开最相关的链接。",
       parameters: {
         type: "object",
         properties: {
-          query: { type: "string" },
+          query: { type: "string", description: "搜索词。英文话题用英文搜效果更好" },
           topic: { type: "string", enum: ["general", "news"], description: "news = 只搜新闻，默认 general" },
+          time_range: { type: "string", enum: ["day", "week", "month", "year"], description: "只要这段时间内的结果（可选）" },
           max_results: { type: "integer", minimum: 1, maximum: 8, description: "默认 5" },
         },
         required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_page",
+      description: "打开一个网页，返回正文（Markdown，截断到约 6000 字）。用来读 web_search / 新闻库结果的全文，或用户直接发来的链接。",
+      parameters: {
+        type: "object",
+        properties: { url: { type: "string", description: "http/https 地址" } },
+        required: ["url"],
       },
     },
   },
@@ -126,6 +143,23 @@ export const TOOL_DEFS: ToolDef[] = [
   },
 ];
 
+const REVERSE_IMAGE_TOOL: ToolDef = {
+  type: "function",
+  function: {
+    name: "reverse_image_search",
+    description:
+      "以图搜图（Google Cloud Vision Web Detection），对象是用户这条消息附带的图片。" +
+      "返回：最佳猜测标签、相关实体、含有相同或相似图片的网页（可用来找出处、原始发布者、首次出现的位置）。" +
+      "用户问「出处」「原图」「这是哪里 / 谁 / 什么」且看图本身答不准时使用。",
+    parameters: { type: "object", properties: {} },
+  },
+};
+
+/** 本次对话可用的工具：有图片时才提供以图搜图 */
+export function toolDefs(ctx: Pick<ToolContext, "image" | "env">): ToolDef[] {
+  return ctx.image && ctx.env.GOOGLE_VISION_API_KEY ? [...TOOL_DEFS, REVERSE_IMAGE_TOOL] : TOOL_DEFS;
+}
+
 type Args = Record<string, unknown>;
 
 export async function runTool(name: string, args: Args, ctx: ToolContext): Promise<unknown> {
@@ -138,6 +172,10 @@ export async function runTool(name: string, args: Args, ctx: ToolContext): Promi
       return getDigest(args, ctx);
     case "web_search":
       return webSearch(args, ctx);
+    case "read_page":
+      return readPage(args, ctx);
+    case "reverse_image_search":
+      return reverseImageSearch(ctx);
     case "add_feed":
       return addFeed(args, ctx);
     case "remove_feed":
@@ -289,6 +327,9 @@ async function getDigest(args: Args, ctx: ToolContext) {
 
 // ---------------- 联网搜索 ----------------
 
+const TIME_RANGES = new Set(["day", "week", "month", "year"]);
+export const PAGE_MAX_CHARS = 6000;
+
 async function webSearch(args: Args, ctx: ToolContext) {
   const key = ctx.env.TAVILY_API_KEY;
   if (!key) return { error: "未配置 TAVILY_API_KEY，无法联网搜索" };
@@ -303,6 +344,7 @@ async function webSearch(args: Args, ctx: ToolContext) {
       max_results: clampInt(args.max_results, 5, 1, 8),
       search_depth: "basic",
       include_answer: "basic",
+      ...(TIME_RANGES.has(String(args.time_range)) ? { time_range: args.time_range } : {}),
     }),
   });
   if (!r.ok) return { error: `Tavily HTTP ${r.status}: ${(await r.text()).slice(0, 200)}` };
@@ -318,6 +360,95 @@ async function webSearch(args: Args, ctx: ToolContext) {
       content: truncate(x.content ?? "", 500),
       ...(x.published_date ? { published: x.published_date } : {}),
     })),
+  };
+}
+
+/** 用 Jina Reader 把网页转成正文 Markdown（免 key，有限流）；失败时直接抓 HTML 粗略去标签 */
+async function readPage(args: Args, ctx: ToolContext) {
+  const url = String(args.url ?? "").trim();
+  if (!/^https?:\/\/[^\s]+$/i.test(url)) return { error: "url 必须是 http/https 地址" };
+  let text = "";
+  let via = "jina";
+  try {
+    const r = await ctx.fetchImpl(`https://r.jina.ai/${url}`, {
+      headers: { "X-Return-Format": "markdown" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (r.ok) text = await r.text();
+  } catch {
+    // 落到下面的直接抓取
+  }
+  if (!text.trim()) {
+    via = "direct";
+    try {
+      const r = await ctx.fetchImpl(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; NewsDigestBot/1.0)" },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!r.ok) return { url, error: `打开失败：HTTP ${r.status}` };
+      text = htmlToText(
+        (await r.text()).replace(/<(script|style|noscript)\b[\s\S]*?<\/\1>/gi, " "),
+      ).replace(/[ \t]*\n\s*\n\s*/g, "\n\n").replace(/[ \t]{2,}/g, " ");
+    } catch (e) {
+      return { url, error: `打开失败：${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
+  return { url, via, content: truncate(text.trim(), PAGE_MAX_CHARS) };
+}
+
+// ---------------- 以图搜图 ----------------
+
+interface WebDetection {
+  bestGuessLabels?: { label: string }[];
+  webEntities?: { description?: string; score?: number }[];
+  fullMatchingImages?: { url: string }[];
+  partialMatchingImages?: { url: string }[];
+  pagesWithMatchingImages?: { url: string; pageTitle?: string; fullMatchingImages?: unknown[] }[];
+  visuallySimilarImages?: { url: string }[];
+}
+
+const stripTags = (s: string) => unescapeHtml(s.replace(/<[^>]+>/g, "")).trim();
+
+async function reverseImageSearch(ctx: ToolContext) {
+  const key = ctx.env.GOOGLE_VISION_API_KEY;
+  if (!key) return { error: "未配置 GOOGLE_VISION_API_KEY，无法以图搜图；请直接根据图片内容判断，必要时用 web_search" };
+  if (!ctx.image) return { error: "这条消息没有附带图片" };
+  const r = await ctx.fetchImpl("https://vision.googleapis.com/v1/images:annotate", {
+    method: "POST",
+    // key 放 header，不出现在 URL 里
+    headers: { "x-goog-api-key": key, "content-type": "application/json" },
+    body: JSON.stringify({
+      requests: [
+        {
+          image: { content: ctx.image.base64 },
+          features: [{ type: "WEB_DETECTION", maxResults: 15 }],
+          imageContext: { webDetectionParams: { includeGeoResults: true } },
+        },
+      ],
+    }),
+  });
+  if (!r.ok) return { error: `Vision HTTP ${r.status}: ${(await r.text()).slice(0, 200)}` };
+  const data = (await r.json()) as { responses?: { webDetection?: WebDetection; error?: { message?: string } }[] };
+  const res = data.responses?.[0];
+  if (res?.error) return { error: `Vision: ${res.error.message ?? "unknown error"}` };
+  const wd = res?.webDetection ?? {};
+  const pages = (wd.pagesWithMatchingImages ?? []).map((p) => ({
+    title: stripTags(p.pageTitle ?? ""),
+    url: p.url,
+    match: p.fullMatchingImages?.length ? "完全相同" : "部分相似",
+  }));
+  // 含完全相同图片的网页排前面：最可能是出处或转载
+  pages.sort((a, b) => Number(b.match === "完全相同") - Number(a.match === "完全相同"));
+  return {
+    best_guess: (wd.bestGuessLabels ?? []).map((l) => l.label),
+    entities: (wd.webEntities ?? [])
+      .filter((e) => e.description)
+      .slice(0, 10)
+      .map((e) => ({ name: e.description, score: Math.round((e.score ?? 0) * 100) / 100 })),
+    pages_with_image: pages.slice(0, 10),
+    same_image_urls: (wd.fullMatchingImages ?? []).slice(0, 5).map((i) => i.url),
+    similar_image_urls: (wd.visuallySimilarImages ?? []).slice(0, 5).map((i) => i.url),
+    note: "Vision 不提供首次发布时间；要判断最早出处，可以对候选网页用 read_page 看发布日期",
   };
 }
 

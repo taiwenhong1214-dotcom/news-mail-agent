@@ -1,7 +1,7 @@
 import systemTemplate from "../../prompts/chat_system.md";
 import { GROUPS, MAX_HISTORY_TURNS, MAX_TOOL_ROUNDS } from "./config";
-import type { ChatMessage, LLM } from "./llm";
-import { TOOL_DEFS, runToolToString, type ToolContext } from "./tools";
+import type { ChatMessage, ContentPart, LLM } from "./llm";
+import { runToolToString, toolDefs, type ToolContext } from "./tools";
 import { fmtMyt, mytWeekday } from "./util";
 
 export function buildSystemPrompt(now: number): string {
@@ -54,18 +54,33 @@ export interface AgentResult {
   toolsUsed: string[];
 }
 
+/** 取消息里的文字部分（content 可能是字符串，也可能是多模态片段数组） */
+export function textOf(content: ChatMessage["content"]): string {
+  if (!content) return "";
+  if (typeof content === "string") return content;
+  return content.map((p) => (p.type === "text" ? p.text : "")).join("");
+}
+
 export async function runAgent(userText: string, deps: AgentDeps): Promise<AgentResult> {
+  const image = deps.toolCtx.image;
+  const userContent: string | ContentPart[] = image
+    ? [
+        { type: "text", text: userText },
+        { type: "image_url", image_url: { url: `data:${image.mime};base64,${image.base64}` } },
+      ]
+    : userText;
   const messages: ChatMessage[] = [
     { role: "system", content: buildSystemPrompt(deps.toolCtx.now) },
     ...deps.history,
-    { role: "user", content: userText },
+    { role: "user", content: userContent },
   ];
+  const tools = toolDefs(deps.toolCtx);
   const toolsUsed: string[] = [];
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const msg = await deps.llm.chat(messages, TOOL_DEFS);
+    const msg = await deps.llm.chat(messages, tools);
     if (!msg.tool_calls?.length) {
-      return { reply: (msg.content ?? "").trim() || "（没有生成回复，请换个说法再试）", toolsUsed };
+      return { reply: textOf(msg.content).trim() || "（没有生成回复，请换个说法再试）", toolsUsed };
     }
     messages.push(msg); // 原样回传（保留服务商附加字段）
     const names = msg.tool_calls.map((tc) => tc.function.name);
@@ -80,6 +95,6 @@ export async function runAgent(userText: string, deps: AgentDeps): Promise<Agent
   }
 
   // 工具轮数用完：要求模型基于已有结果直接回答
-  const final = await deps.llm.chat(messages, TOOL_DEFS, "none");
-  return { reply: (final.content ?? "").trim() || "（查询步骤太多，没能完成，请把问题拆小一点）", toolsUsed };
+  const final = await deps.llm.chat(messages, tools, "none");
+  return { reply: textOf(final.content).trim() || "（查询步骤太多，没能完成，请把问题拆小一点）", toolsUsed };
 }

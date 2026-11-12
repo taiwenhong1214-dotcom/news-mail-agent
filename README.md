@@ -89,6 +89,7 @@ npx wrangler d1 migrations apply news-agent --remote
 需要先准备：
 - **Tavily API key**：在 [tavily.com](https://tavily.com) 注册，免费额度每月 1000 次搜索。
 - **GitHub fine-grained token**：GitHub → Settings → Developer settings → Fine-grained tokens。Repository access 只选本仓库，Permissions 选 **Actions: Read and write**。Worker 用它触发流水线（定时任务和 `/run` 命令）。
+- **Google Cloud Vision API key**（可选，以图搜图找出处用）：[Google Cloud Console](https://console.cloud.google.com/) 新建项目 → 启用 **Cloud Vision API** → 绑定结算账号（Vision 要求有结算账号，每月前 1000 次免费，超出约 $3.5 / 千次，以官网为准）→ **APIs & Services → Credentials → Create credentials → API key**，再把 key 限制为只能调用 Cloud Vision API。不配也能发图：bot 会直接看图识别内容，再用联网搜索找线索，只是找不到「同一张图出现在哪些网页」。
 - **webhook secret**：自己生成一个随机字符串（只能用字母、数字、`_`、`-`），例如在 PowerShell 里运行 `[guid]::NewGuid().ToString('N')`。
 
 ```bash
@@ -103,6 +104,7 @@ npx wrangler secret put ALLOWED_CHAT_IDS          # 你的 chat_id；多个用�
 npx wrangler secret put LLM_API_KEY               # Gemini key
 npx wrangler secret put TAVILY_API_KEY
 npx wrangler secret put GITHUB_TOKEN
+npx wrangler secret put GOOGLE_VISION_API_KEY     # 可选
 
 npx wrangler deploy                               # 输出里有 Worker 地址：https://news-agent.<你的子域>.workers.dev
 ```
@@ -111,7 +113,12 @@ npx wrangler deploy                               # 输出里有 Worker 地址�
 
 Worker 的非敏感配置（对话模型、仓库名等）在 `worker/wrangler.toml` 的 `[vars]` 里。
 
-**Bot 用法**：直接用中文提问，例如「今天有什么大事」「最近 AI 基础设施有什么新闻」「搜一下马来西亚数据中心招聘」「屏蔽 crypto」「把 https://xxx/feed 加到 DevOps」。快捷命令：
+**Bot 用法**：直接用中文提问，例如「今天有什么大事」「最近 AI 基础设施有什么新闻」「搜一下马来西亚数据中心招聘」「屏蔽 crypto」「把 https://xxx/feed 加到 DevOps」。
+
+- **实时搜索**：说「搜一下 / 查一下 / 最新」就会联网搜（Tavily），会按需限定时间范围，并用 `read_page` 打开 1–2 个结果读全文再回答。直接发链接也能读。
+- **发图片**：识别图里的内容（人物、地点、产品、截图文字），问出处时用 Cloud Vision 以图搜图，列出含有相同图片的网页，再联网核实。可以给图片加文字说明你想问什么；不加的话默认问「这是什么、出处在哪」。请以「照片」方式发送（上限 1.5MB）。
+
+快捷命令：
 
 | 命令 | 作用 |
 |---|---|
@@ -164,6 +171,7 @@ npx wrangler dev --local          # 本地启动；密钥写在 worker/.dev.vars
 - **Gemini**：每 80 条约 2 万 token。按每天 500 条新条目算，约 13 万 token/天，在免费额度内；付费的话每月也不到 1 美元。
 - **D1 免费版**：每天约几千行写入（上限 10 万），每年约 300MB（上限 5GB）。
 - **Workers / Tavily**：Workers 免费版每天 10 万次请求；Tavily 免费额度每月 1000 次搜索，只在 bot 判断需要联网时才调用。
+- **Jina Reader / Cloud Vision**：`read_page` 走 r.jina.ai，免 key，有频率限制，失败时会直接抓网页；Vision 每月前 1000 次免费，只在发图并问出处时调用。
 - **Actions**：公开仓库不限分钟数。Gemini 正常时每次运行 1–2 分钟；主模型过载时会自动切到备用模型，最长约 6 分钟。
 
 ## 目录
@@ -181,7 +189,7 @@ pipeline/nma/       Python 流水线
 worker/src/         Cloudflare Worker（TypeScript）
   index.ts          webhook / setup / cron 入口
   agent.ts          function calling 循环、对话历史
-  tools.ts          search_news、top_news、get_digest、web_search、add_feed 等工具
+  tools.ts          search_news、top_news、get_digest、web_search、read_page、reverse_image_search、add_feed 等工具
   commands.ts       /digest /run /status 等命令
 docs/ARCHITECTURE.md
 ```

@@ -7,9 +7,14 @@ export interface ToolCall {
   [k: string]: unknown; // 保留服务商附加字段（如 Gemini 的 thought signature），回传时原样带上
 }
 
+/** 多模态消息片段（OpenAI 兼容格式，Gemini 支持 data URI 图片） */
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content?: string | null;
+  content?: string | ContentPart[] | null;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   [k: string]: unknown;

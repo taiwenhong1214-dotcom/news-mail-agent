@@ -4,11 +4,35 @@ import type { Env } from "./env";
 import { dispatchPipeline } from "./github";
 import { LLM } from "./llm";
 import { Telegram } from "./telegram";
-import { escapeHtml, nowSec, safeEqual } from "./util";
+import { MAX_IMAGE_BYTES } from "./config";
+import { bytesToBase64, escapeHtml, nowSec, safeEqual } from "./util";
+
+interface TgPhotoSize {
+  file_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
+}
 
 interface TgUpdate {
   update_id: number;
-  message?: { chat: { id: number }; text?: string; caption?: string };
+  message?: {
+    chat: { id: number };
+    text?: string;
+    caption?: string;
+    photo?: TgPhotoSize[]; // 同一张图的多个尺寸，从小到大
+    document?: { file_id: string; mime_type?: string; file_size?: number }; // 以「文件」方式发送的原图
+  };
+}
+
+const DEFAULT_IMAGE_PROMPT = "这张图是什么？帮我找找出处和相关信息。";
+
+/** 取消息里的图片：照片取最大尺寸；以文件发送的只接受 image/* */
+export function pickImage(msg: NonNullable<TgUpdate["message"]>): { fileId: string; mime: string } | null {
+  if (msg.photo?.length) return { fileId: msg.photo[msg.photo.length - 1].file_id, mime: "image/jpeg" };
+  const doc = msg.document;
+  if (doc && /^image\/(jpeg|png|webp|heic|heif)$/.test(doc.mime_type ?? "")) return { fileId: doc.file_id, mime: doc.mime_type! };
+  return null;
 }
 
 export interface Deps {
@@ -45,8 +69,9 @@ export async function handleWebhook(req: Request, env: Env, deps: Deps = default
     return new Response("bad request", { status: 400 });
   }
   const msg = update.message;
-  const text = (msg?.text ?? msg?.caption ?? "").trim();
-  // 非白名单 / 非文字消息：直接 200，不回应（不暴露 bot 存在）
+  const imageRef = msg ? pickImage(msg) : null;
+  const text = (msg?.text ?? msg?.caption ?? "").trim() || (imageRef ? DEFAULT_IMAGE_PROMPT : "");
+  // 非白名单 / 既没文字也没图片：直接 200，不回应（不暴露 bot 存在）
   if (!msg || !text || !allowedChatIds(env).has(msg.chat.id)) return new Response("ok");
 
   const now = deps.now();
@@ -62,10 +87,15 @@ export async function handleWebhook(req: Request, env: Env, deps: Deps = default
   const chatId = msg.chat.id;
   const tg = new Telegram(env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_DRY_RUN === "1", deps.fetchImpl);
   try {
-    if (text.startsWith("/") && (await handleCommand(text, { env, tg, chatId, now, fetchImpl: deps.fetchImpl }))) {
+    if (!imageRef && text.startsWith("/") && (await handleCommand(text, { env, tg, chatId, now, fetchImpl: deps.fetchImpl }))) {
       return new Response("ok");
     }
     await tg.typing(chatId);
+    let image: { mime: string; base64: string } | undefined;
+    if (imageRef) {
+      const bytes = await tg.downloadFile(imageRef.fileId, MAX_IMAGE_BYTES);
+      image = { mime: imageRef.mime, base64: bytesToBase64(bytes) };
+    }
     const llm = new LLM({
       baseUrl: env.LLM_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai/",
       apiKey: env.LLM_API_KEY,
@@ -77,11 +107,12 @@ export async function handleWebhook(req: Request, env: Env, deps: Deps = default
     const { reply } = await runAgent(text, {
       llm,
       history,
-      toolCtx: { env, now, fetchImpl: deps.fetchImpl },
+      toolCtx: { env, now, fetchImpl: deps.fetchImpl, image },
       onToolRound: () => tg.typing(chatId),
     });
     await tg.sendMarkdown(chatId, reply);
-    await saveTurn(env.DB, chatId, text, reply, now);
+    // 历史里不存图片本身（太大）；回复里通常已经描述了图片内容，后续追问够用
+    await saveTurn(env.DB, chatId, image ? `[发了一张图片] ${text}` : text, reply, now);
   } catch (e) {
     console.error("handle message failed", e);
     const detail = e instanceof Error ? e.message : String(e);

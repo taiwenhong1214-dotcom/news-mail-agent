@@ -101,6 +101,21 @@ export class Telegram {
     }
   }
 
+  /** 下载用户发来的文件（getFile → file_path → 下载）。文件 URL 含 bot token，只在 Worker 内部使用，不外传 */
+  async downloadFile(fileId: string, maxBytes: number): Promise<Uint8Array> {
+    const r = await this.call("getFile", { file_id: fileId });
+    if (!r) throw new Error("dry-run 模式不能下载文件");
+    const data = (await r.json()) as { ok: boolean; result?: { file_path?: string; file_size?: number }; description?: string };
+    const path = data.result?.file_path;
+    if (!data.ok || !path) throw new Error(`getFile 失败：${data.description ?? "无 file_path"}`);
+    if ((data.result?.file_size ?? 0) > maxBytes) throw new Error(`图片太大（上限 ${maxBytes / 1e6}MB），请以「照片」方式发送，不要选「文件」`);
+    const f = await this.fetchImpl(`https://api.telegram.org/file/bot${this.token}/${path}`);
+    if (!f.ok) throw new Error(`下载文件失败：HTTP ${f.status}`);
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    if (bytes.length > maxBytes) throw new Error(`图片太大（上限 ${maxBytes / 1e6}MB），请以「照片」方式发送，不要选「文件」`);
+    return bytes;
+  }
+
   async setWebhook(url: string, secret: string): Promise<unknown> {
     const r = await this.call("setWebhook", {
       url,

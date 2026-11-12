@@ -70,7 +70,9 @@ LLM 客户端：主模型 `gemini-3.5-flash-lite`，过载（429/5xx）或不存
 
 - **入口**：`POST /telegram`（校验 `X-Telegram-Bot-Api-Secret-Token`，chat_id 白名单，`update_id` 去重）；`GET /setup?secret=` 一键设置 webhook；Cron `7,37 * * * *` 触发 GitHub `workflow_dispatch`，失败时最多每 6 小时告警一次（`app_state` 表节流）
 - **命令**（不经过 LLM）：`/digest` `/run` `/status` `/settings` `/reset` `/help`
-- **工具**：`search_news`（FTS trigram；少于 3 个字的词走 LIKE；先 AND，没结果再 OR）、`top_news`、`get_digest`、`web_search`（Tavily）、`add_feed`（先抓取验证是 RSS/Atom）、`remove_feed`、`mute_keyword`、`unmute_keyword`、`list_settings`
+- **工具**：`search_news`（FTS trigram；少于 3 个字的词走 LIKE；先 AND，没结果再 OR）、`top_news`、`get_digest`、`web_search`（Tavily，可选 `time_range`）、`read_page`（Jina Reader，失败时直接抓取）、`reverse_image_search`（Cloud Vision Web Detection，只在消息带图且配了 key 时提供）、`add_feed`（先抓取验证是 RSS/Atom）、`remove_feed`、`mute_keyword`、`unmute_keyword`、`list_settings`
 - **对话**：`gemini-2.5-flash` 为主，备用 `gemini-3.1-flash-lite`、`gemini-3.5-flash-lite`；最多 4 轮工具调用，用完后强制给出回答；历史只存用户消息和最终回复，保留 20 轮
 - **Gemini thought signature**：Gemini 3 要求回传工具调用的签名，代码会原样保留服务商返回的附加字段。中途换模型时，旧模型发起的调用没有签名，遇到 400 时补上官方占位签名再重试
 - **Workers 免费版限制**：每次请求 CPU 10ms（等待网络不算），一条消息的子请求约 10–20 个（上限 50）。处理在请求内同步完成，Telegram 超时重发由 `update_id` 去重
+- **图片**：照片取最大尺寸，以文件发送的只接受 image/*，上限 1.5MB。Worker 用 `getFile` 下载后转 base64，以 data URI 发给 LLM（文件 URL 含 bot token，不交给任何第三方）。Vision 的 key 放在 `x-goog-api-key` header，不出现在 URL 里。对话历史只存文字（`[发了一张图片] 问题`），不存图
+- **CPU 预算**：base64 优先用原生 `Uint8Array.toBase64`，没有时查表写字节数组再一次性解码（300KB 约 1ms；`String.fromCharCode` + `btoa` 要 14ms，会超过免费版的 10ms 上限）
