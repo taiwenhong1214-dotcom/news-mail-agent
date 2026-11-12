@@ -1,0 +1,63 @@
+# 预筛规则（不调用 LLM）。对话里 mute_keyword 加的词存在 D1 的 muted_keywords 表，运行时并入 block。
+# 匹配规则：不区分大小写，在「标题 + 摘要」里做子串匹配。
+
+title:
+  min_len: 8        # 标题太短（字符数）通常是噪音
+  max_len: 300
+
+# 全局黑名单：命中任意一个词就过滤
+block:
+  - sponsored
+  - "partner content"
+  - "advertorial"
+  - giveaway
+  - "promo code"
+  - coupon
+  - "deal alert"
+  - "best deals"
+  - horoscope
+  - 优惠券
+  - 抽奖
+  - 赞助
+  - 广告
+
+# 广告 / 营销标题模式（正则，只匹配标题）
+ad_patterns:
+  - "(?i)^\\s*\\[?(ad|sponsored|promoted)\\]?\\s*[:|-]"
+  - "(?i)\\b(webinar|register now|sign up today|free trial)\\b"
+  - "(?i)\\b\\d+% off\\b"
+
+# 分组白名单：列了词的分组，条目必须命中至少一个才放行；没列（或为空）的分组不限制
+require_any:
+  my-jobs:
+    - hiring
+    - hire
+    - jobs
+    - job
+    - talent
+    - layoff
+    - retrench
+    - salary
+    - workforce
+    - recruit
+    - career
+    - employ
+    - investment
+    - data centre
+    - data center
+    - semiconductor
+    - 招聘
+    - 裁员
+    - 人才
+  stocks:
+    - stock
+    - share
+    - shares
+    - bursa
+    - nasdaq
+    - market
+    - earnings
+    - rally
+    - price target
+    - analyst
+    - 股

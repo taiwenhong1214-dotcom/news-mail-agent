@@ -1,0 +1,9 @@
+# 阶段 1 只用来建库和跑 migration；Worker 代码在阶段 3 加上。
+name = "news-agent"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "news-agent"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"   # npx wrangler d1 create news-agent 输出的 id
+migrations_dir = "../migrations"

@@ -1,0 +1,80 @@
+# 信源配置（基线）。对话里 add_feed 加的源存在 D1 的 config_feeds 表，运行时合并。
+#
+# tier: T1 = 高质量 / 一手信源，打分时作为参考信号，同分时优先；T2 = 补充源
+# url 也可以写成 "rsshub:/路由"，会拼到 rsshub_base 后面（公共 rsshub.app 限流严重，建议自建或换镜像）
+# Google News 搜索 RSS 用来补没有原生 RSS 的领域，q= 后面写查询词，when:2d 限定时间
+
+rsshub_base: https://rsshub.app
+
+groups:
+  devops:
+    name: DevOps
+    feeds:
+      - { name: The New Stack, url: "https://thenewstack.io/feed/", tier: T1 }
+      - { name: InfoQ DevOps, url: "https://feed.infoq.com/devops/", tier: T1 }
+      - { name: GitHub Blog, url: "https://github.blog/feed/", tier: T2 }
+
+  cloud-native:
+    name: 云原生
+    feeds:
+      - { name: Kubernetes Blog, url: "https://kubernetes.io/feed.xml", tier: T1 }
+      - { name: Google Cloud Blog, url: "https://cloudblog.withgoogle.com/rss/", tier: T2 }
+      - { name: "Google News: cloud native", url: "https://news.google.com/rss/search?q=(Kubernetes+OR+CNCF+OR+%22cloud+native%22)+when:2d&hl=en-US&gl=US&ceid=US:en", tier: T2 }
+      - { name: AWS News Blog, url: "https://aws.amazon.com/blogs/aws/feed/", tier: T1 }
+      - { name: Cloudflare Blog, url: "https://blog.cloudflare.com/rss/", tier: T2 }
+
+  ai-infra:
+    name: AI 基础设施
+    feeds:
+      # AIHOT：中文 AI 资讯精选（个人非商业使用免费）；original_link 取摘要里的原文链接
+      - { name: AIHOT, url: "https://aihot.news/feed.xml", tier: T1, original_link: true }
+      - { name: Hugging Face Blog, url: "https://huggingface.co/blog/feed.xml", tier: T1 }
+      - { name: SemiAnalysis, url: "https://newsletter.semianalysis.com/feed", tier: T1 }
+      - { name: Simon Willison, url: "https://simonwillison.net/atom/everything/", tier: T1 }
+      - { name: NVIDIA Technical Blog, url: "https://developer.nvidia.com/blog/feed", tier: T2 }
+
+  my-jobs:
+    name: 大马科技招聘
+    feeds:
+      - { name: "Google News: MY tech hiring", url: "https://news.google.com/rss/search?q=Malaysia+(tech+OR+IT+OR+software)+(hiring+OR+jobs+OR+talent+OR+layoffs)+when:2d&hl=en-MY&gl=MY&ceid=MY:en", tier: T2 }
+      - { name: "Google News: MY data centre jobs", url: "https://news.google.com/rss/search?q=Malaysia+(%22data+centre%22+OR+%22data+center%22+OR+semiconductor)+(jobs+OR+hiring+OR+investment)+when:2d&hl=en-MY&gl=MY&ceid=MY:en", tier: T2 }
+
+  my-it:
+    name: 大马 IT
+    feeds:
+      - { name: SoyaCincau, url: "https://soyacincau.com/feed/", tier: T1 }
+      - { name: Lowyat.NET, url: "https://www.lowyat.net/feed/", tier: T2 }
+      - { name: Vulcan Post, url: "https://vulcanpost.com/feed/", tier: T2 }
+
+  my-local:
+    name: 大马本地
+    feeds:
+      - { name: Free Malaysia Today, url: "https://www.freemalaysiatoday.com/feed/", tier: T1 }
+      - { name: Malay Mail, url: "https://www.malaymail.com/feed/rss/malaysia", tier: T2 }
+      - { name: 当今大马, url: "https://www.malaysiakini.com/rss/zh/news.rss", tier: T2 }
+
+  world:
+    name: 国际
+    feeds:
+      - { name: BBC World, url: "https://feeds.bbci.co.uk/news/world/rss.xml", tier: T1 }
+      - { name: Al Jazeera, url: "https://www.aljazeera.com/xml/rss/all.xml", tier: T2 }
+
+  trends:
+    name: 世界趋势
+    feeds:
+      - { name: Hacker News 200+, url: "https://hnrss.org/frontpage?points=200", tier: T1 }
+      - { name: MIT Technology Review, url: "https://www.technologyreview.com/feed/", tier: T1 }
+      - { name: Rest of World, url: "https://restofworld.org/feed/latest/", tier: T1 }
+
+  finance:
+    name: 金融
+    feeds:
+      - { name: CNBC Top News, url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", tier: T1 }
+      - { name: Malay Mail Money, url: "https://www.malaymail.com/feed/rss/money", tier: T2 }
+
+  stocks:
+    name: 马股美股科技
+    feeds:
+      - { name: CNBC Technology, url: "https://www.cnbc.com/id/19854910/device/rss/rss.html", tier: T1 }
+      - { name: "Google News: Bursa tech stocks", url: "https://news.google.com/rss/search?q=Bursa+Malaysia+(technology+OR+tech+OR+semiconductor)+stocks+when:2d&hl=en-MY&gl=MY&ceid=MY:en", tier: T2 }
+      - { name: "Google News: US tech stocks", url: "https://news.google.com/rss/search?q=(Nvidia+OR+Microsoft+OR+Apple+OR+Alphabet+OR+Amazon+OR+Meta+OR+Tesla)+stock+when:1d&hl=en-US&gl=US&ceid=US:en", tier: T2 }

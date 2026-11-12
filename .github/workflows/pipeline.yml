@@ -1,0 +1,80 @@
+name: news-pipeline
+
+on:
+  schedule:
+    # 每 30 分钟一次。避开整点（整点 GitHub 定时任务最拥挤，延迟最大）
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "要跑的阶段"
+        type: choice
+        options: [all, fetch, score, merge, push, digest]
+        default: all
+      force_digest:
+        description: "立即生成并发送日报"
+        type: boolean
+        default: false
+
+# 同一时间只跑一个，后来的排队，避免并发写库
+concurrency:
+  group: news-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: pipeline
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        id: run
+        env:
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          # 以下可在仓库 Settings → Variables 里覆盖，不设就用代码默认值
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LLM_FALLBACK_MODELS: ${{ vars.LLM_FALLBACK_MODELS }}
+          PUSH_THRESHOLD: ${{ vars.PUSH_THRESHOLD }}
+        run: |
+          set +e
+          args="${{ inputs.stage || 'all' }}"
+          if [ "${{ inputs.force_digest }}" = "true" ]; then args="$args --force-digest"; fi
+          python -m nma $args
+          code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit $code
+
+      # 兜底告警：安装依赖失败、Python 崩溃等程序自己没来得及告警的情况
+      # （退出码 2 表示程序已经发过告警，这里不重复发）
+      - name: Alert on unexpected failure
+        if: failure() && steps.run.outputs.code != '2'
+        working-directory: .
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -s -o /dev/null -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=⚠️ News pipeline 运行失败（未捕获错误）：${RUN_URL}"
