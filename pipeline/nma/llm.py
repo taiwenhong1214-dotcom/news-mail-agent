@@ -51,17 +51,19 @@ class LLMClient:
 
     def chat(self, messages: list[dict], temperature: float = 0.2) -> str:
         """主模型过载（429/5xx/超时重试用尽）或不存在（404）时，切到下一个备用模型，
-        并在本次运行内一直用它。"""
+        并在本次运行内一直用它。当前模型再失败时，每个模型都再试一轮（包括之前失败过的，
+        过载往往几分钟就恢复），全部失败才报错。"""
         errors = []
-        while True:
+        n = len(self.models)
+        for idx in [(self.model_idx + k) % n for k in range(n)]:
+            if idx != self.model_idx:
+                log.warning("切换到备用模型 %s", self.models[idx])
+                self.model_idx = idx
             try:
                 return self._chat_once(self.model, messages, temperature)
             except _ModelUnavailable as e:
                 errors.append(f"{self.model}: {e}")
-                if self.model_idx + 1 >= len(self.models):
-                    raise LLMError("所有模型都不可用 | " + " | ".join(errors)) from None
-                self.model_idx += 1
-                log.warning("切换到备用模型 %s", self.model)
+        raise LLMError("所有模型都不可用 | " + " | ".join(errors))
 
     def _chat_once(self, model: str, messages: list[dict], temperature: float) -> str:
         body: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}

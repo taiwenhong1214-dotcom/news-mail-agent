@@ -247,7 +247,13 @@ def merge_events(db: Database, llm: LLMClient, settings: Settings, now: int | No
     prompt = load_prompt("events.md").replace(
         "{{items}}", json.dumps(payload, ensure_ascii=False, indent=1)
     )
-    groups = extract_groups(llm.chat([{"role": "user", "content": prompt}]), set(by_id))
+    try:
+        text = llm.chat([{"role": "user", "content": prompt}])
+    except LLMError as e:
+        # 合并只是锦上添花：没合并顶多同一事件多推一条，24 小时内的条目下次运行还会再合并，不用告警
+        log.warning("事件合并跳过: %s", e)
+        return {"candidates": len(rows), "merged": 0, "skipped": "LLM 不可用"}
+    groups = extract_groups(text, set(by_id))
 
     merged = 0
     for g in groups:

@@ -45,6 +45,17 @@ def test_fallback_to_next_model_and_stick():
     assert [b["model"] for b in seen] == ["m1", "m1", "m1", "m2", "m2"]
 
 
+def test_last_fallback_down_wraps_to_recovered_primary():
+    down = {"m1", "m2"}
+    c, seen = make(lambda b, n: httpx.Response(503) if b["model"] in down else ok(b["model"]),
+                   fallback_models=["m2", "m3"], retries=2)
+    assert c.chat([]) == "m3"
+    down = {"m2", "m3"}                             # 之后 m1 恢复、m3 过载
+    seen.clear()
+    assert c.chat([]) == "m1" and c.model == "m1"   # 回头试已恢复的 m1
+    assert [b["model"] for b in seen] == ["m3", "m3", "m1"]
+
+
 def test_404_switches_model_immediately():
     c, seen = make(lambda b, n: httpx.Response(404) if b["model"] == "m1" else ok("y"),
                    fallback_models=["m2"])

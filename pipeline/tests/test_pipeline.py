@@ -162,6 +162,16 @@ def test_old_high_score_not_pushed(env):
     assert push_instant(db, FakeTG(), s, now=NOW)["pushed"] == 0   # 超过 12h 只进日报
 
 
+def test_merge_events_llm_down_skips_quietly(env):
+    s, db, rules = env
+    ingest(db, [make_item("https://x.com/a", "Nvidia CEO resigns"),
+                make_item("https://x.com/b", "Kubernetes 1.36 released")], s, rules, now=NOW)
+    score_pending(db, FakeLLM(scores={"Nvidia CEO resigns": 9, "Kubernetes 1.36 released": 8}), s, now=NOW)
+    st = merge_events(db, FakeLLM(mode="error"), s, now=NOW)
+    assert st["merged"] == 0 and st["skipped"]
+    assert {r["status"] for r in db.query("SELECT status FROM news_items")} == {"scored"}
+
+
 def test_merge_events_keeps_pushed_primary(env):
     s, db, rules = env
     a, b, c = ("Nvidia CEO Jensen Huang resigns effective immediately",
