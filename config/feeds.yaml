@@ -13,6 +13,9 @@ groups:
       - { name: The New Stack, url: "https://thenewstack.io/feed/", tier: T1 }
       - { name: InfoQ DevOps, url: "https://feed.infoq.com/devops/", tier: T1 }
       - { name: GitHub Blog, url: "https://github.blog/feed/", tier: T2 }
+      # 安全事件和漏洞（供应链攻击、CVE、勒索），DevOps 必看
+      - { name: BleepingComputer, url: "https://www.bleepingcomputer.com/feed/", tier: T1 }
+      - { name: HashiCorp Blog, url: "https://www.hashicorp.com/blog/feed.xml", tier: T2 }
 
   cloud-native:
     name: 云原生
@@ -22,6 +25,7 @@ groups:
       - { name: "Google News: cloud native", url: "https://news.google.com/rss/search?q=(Kubernetes+OR+CNCF+OR+%22cloud+native%22)+when:2d&hl=en-US&gl=US&ceid=US:en", tier: T2 }
       - { name: AWS News Blog, url: "https://aws.amazon.com/blogs/aws/feed/", tier: T1 }
       - { name: Cloudflare Blog, url: "https://blog.cloudflare.com/rss/", tier: T2 }
+      - { name: Azure Updates, url: "https://www.microsoft.com/releasecommunications/api/v2/azure/rss", tier: T2 }
 
   ai-infra:
     name: AI 基础设施
@@ -32,12 +36,18 @@ groups:
       - { name: SemiAnalysis, url: "https://newsletter.semianalysis.com/feed", tier: T1 }
       - { name: Simon Willison, url: "https://simonwillison.net/atom/everything/", tier: T1 }
       - { name: NVIDIA Technical Blog, url: "https://developer.nvidia.com/blog/feed", tier: T2 }
+      # 大厂一手发布 + 英文 AI 行业新闻（AIHOT 是中文精选，两边互补）
+      - { name: Google DeepMind, url: "https://deepmind.google/blog/rss.xml", tier: T1 }
+      - { name: OpenAI News, url: "https://openai.com/news/rss.xml", tier: T1 }
+      - { name: The Decoder, url: "https://the-decoder.com/feed/", tier: T2 }
 
   my-jobs:
     name: 大马科技招聘
     feeds:
       - { name: "Google News: MY tech hiring", url: "https://news.google.com/rss/search?q=Malaysia+(tech+OR+IT+OR+software)+(hiring+OR+jobs+OR+talent+OR+layoffs)+when:2d&hl=en-MY&gl=MY&ceid=MY:en", tier: T2 }
       - { name: "Google News: MY data centre jobs", url: "https://news.google.com/rss/search?q=Malaysia+(%22data+centre%22+OR+%22data+center%22+OR+semiconductor)+(jobs+OR+hiring+OR+investment)+when:2d&hl=en-MY&gl=MY&ceid=MY:en", tier: T2 }
+      # 东南亚科技创投；靠分组白名单只留招聘 / 裁员 / 投资相关的
+      - { name: Tech in Asia, url: "https://www.techinasia.com/feed", tier: T2 }
 
   my-it:
     name: 大马 IT
@@ -52,12 +62,16 @@ groups:
       - { name: Free Malaysia Today, url: "https://www.freemalaysiatoday.com/feed/", tier: T1 }
       - { name: Malay Mail, url: "https://www.malaymail.com/feed/rss/malaysia", tier: T2 }
       - { name: 当今大马, url: "https://www.malaysiakini.com/rss/zh/news.rss", tier: T2 }
+      - { name: Malaysiakini, url: "https://www.malaysiakini.com/en/rss/news.rss", tier: T1 }
+      # 国家通讯社：官方声明、政策快讯。HTTP 头和 XML 声明的编码不一致，靠 fetch.py 传 Content-Type 解决
+      - { name: Bernama, url: "https://www.bernama.com/en/rssfeed.php", tier: T2 }
 
   world:
     name: 国际
     feeds:
       - { name: BBC World, url: "https://feeds.bbci.co.uk/news/world/rss.xml", tier: T1 }
       - { name: Al Jazeera, url: "https://www.aljazeera.com/xml/rss/all.xml", tier: T2 }
+      - { name: CNA Asia, url: "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=6511", tier: T1 }
 
   trends:
     name: 世界趋势
@@ -65,16 +79,19 @@ groups:
       - { name: Hacker News 200+, url: "https://hnrss.org/frontpage?points=200", tier: T1 }
       - { name: MIT Technology Review, url: "https://www.technologyreview.com/feed/", tier: T1 }
       - { name: Rest of World, url: "https://restofworld.org/feed/latest/", tier: T1 }
+      - { name: The Register, url: "https://www.theregister.com/headlines.atom", tier: T2 }
 
   finance:
     name: 金融
     feeds:
       - { name: CNBC Top News, url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", tier: T1 }
       - { name: Malay Mail Money, url: "https://www.malaymail.com/feed/rss/money", tier: T2 }
+      - { name: Federal Reserve, url: "https://www.federalreserve.gov/feeds/press_all.xml", tier: T1 }
 
   stocks:
     name: 马股美股科技
     feeds:
       - { name: CNBC Technology, url: "https://www.cnbc.com/id/19854910/device/rss/rss.html", tier: T1 }
       - { name: "Google News: Bursa tech stocks", url: "https://news.google.com/rss/search?q=Bursa+Malaysia+(technology+OR+tech+OR+semiconductor)+stocks+when:2d&hl=en-MY&gl=MY&ceid=MY:en", tier: T2 }
-      - { name: "Google News: US tech stocks", url: "https://news.google.com/rss/search?q=(Nvidia+OR+Microsoft+OR+Apple+OR+Alphabet+OR+Amazon+OR+Meta+OR+Tesla)+stock+when:1d&hl=en-US&gl=US&ceid=US:en", tier: T2 }
+      # 只要主流财经媒体：不加 site: 限制时，一半以上是美国地方台和转载站
+      - { name: "Google News: US tech stocks", url: "https://news.google.com/rss/search?q=(Nvidia+OR+Microsoft+OR+Apple+OR+Alphabet+OR+Amazon+OR+Meta+OR+Tesla)+stock+(site:reuters.com+OR+site:cnbc.com+OR+site:bloomberg.com+OR+site:wsj.com+OR+site:ft.com)+when:1d&hl=en-US&gl=US&ceid=US:en", tier: T2 }

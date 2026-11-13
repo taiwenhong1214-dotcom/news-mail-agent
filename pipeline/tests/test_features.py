@@ -129,6 +129,20 @@ def test_watch_ignores_items_before_creation_and_expired(env):
     assert push_watches(db, FakeTG(), s, now=NOW + 120)["watch_pushed"] == 0
 
 
+# ---------------- 抓取编码 ----------------
+
+def test_http_charset_wins_over_xml_declaration():
+    """Bernama：HTTP 头是 UTF-8，XML 声明写 ISO-8859-1，标题字节是双重编码的（取自真实 feed）。"""
+    from nma.news.fetch import FeedSource, parse_feed
+    pub = datetime.fromtimestamp(NOW - 3600, MYT).strftime("%a, %d %b %Y %H:%M:%S %z").encode()
+    xml = (b'<?xml version="1.0" encoding="ISO-8859-1"?><rss version="2.0"><channel><title>B</title>'
+           b"<item><title>Marble Re\xc3\xa2\xc2\x80\xc2\x99s Ratings</title><link>https://b.com/1</link>"
+           b"<pubDate>" + pub + b"</pubDate></item></channel></rss>")
+    src = FeedSource(name="Bernama", url="https://b.com/rss", group="my-local")
+    assert parse_feed(src, xml, 48, now=NOW, content_type="text/xml;charset=UTF-8")[0].title == "Marble Re’s Ratings"
+    assert parse_feed(src, xml, 48, now=NOW)[0].title == "Marble Reâ€™s Ratings"   # 不传 HTTP 头就乱码（旧行为）
+
+
 # ---------------- 周报 ----------------
 
 def test_weekly_slot_and_window(env):

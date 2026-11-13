@@ -70,17 +70,18 @@ def load_sources(feeds_cfg: dict, db: Database | None = None) -> list[FeedSource
 
 
 async def _fetch_one(client: httpx.AsyncClient, sem: asyncio.Semaphore, src: FeedSource,
-                     timeout: float) -> tuple[FeedSource, bytes | None, str | None]:
+                     timeout: float) -> tuple[FeedSource, bytes | None, str | None, str]:
+    """返回 (源, 内容, 错误, Content-Type)。"""
     async with sem:
         try:
             r = await asyncio.wait_for(client.get(src.url, follow_redirects=True), timeout)
             if r.status_code != 200:
-                return src, None, f"HTTP {r.status_code}"
-            return src, r.content, None
+                return src, None, f"HTTP {r.status_code}", ""
+            return src, r.content, None, r.headers.get("content-type", "")
         except asyncio.TimeoutError:
-            return src, None, "timeout"
+            return src, None, "timeout", ""
         except httpx.HTTPError as e:
-            return src, None, type(e).__name__
+            return src, None, type(e).__name__, ""
 
 
 async def fetch_all(sources: list[FeedSource], timeout: float = 10.0, concurrency: int = 10):
@@ -92,9 +93,12 @@ async def fetch_all(sources: list[FeedSource], timeout: float = 10.0, concurrenc
         return await asyncio.gather(*[_fetch_one(client, sem, s, timeout) for s in sources])
 
 
-def parse_feed(src: FeedSource, content: bytes, window_hours: int, now: float | None = None) -> list[Item]:
+def parse_feed(src: FeedSource, content: bytes, window_hours: int, now: float | None = None,
+               content_type: str = "") -> list[Item]:
     now = time.time() if now is None else now
-    parsed = feedparser.parse(content)
+    # 把 HTTP Content-Type 交给 feedparser：有的站（如 Bernama）HTTP 头写 UTF-8、XML 声明却写 ISO-8859-1，
+    # 按规范以 HTTP 头为准；不传的话 feedparser 只看 XML 声明，标题里的 ’ 会变成 â€™
+    parsed = feedparser.parse(content, response_headers={"content-type": content_type} if content_type else None)
     items: list[Item] = []
     for e in parsed.entries:
         link = e.get("link") or ""
@@ -133,12 +137,12 @@ def fetch_items(sources: list[FeedSource], window_hours: int, timeout: float = 1
     results = asyncio.run(fetch_all(sources, timeout, concurrency))
     items: list[Item] = []
     failures: list[str] = []
-    for src, content, err in results:
+    for src, content, err, content_type in results:
         if err:
             failures.append(f"{src.name}: {err}")
             continue
         try:
-            items.extend(parse_feed(src, content, window_hours))
+            items.extend(parse_feed(src, content, window_hours, content_type=content_type))
         except Exception as e:  # 单个 feed 解析异常不影响整体
             failures.append(f"{src.name}: parse {type(e).__name__}")
     return items, failures
