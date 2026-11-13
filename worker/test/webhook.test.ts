@@ -87,7 +87,8 @@ describe("webhook", () => {
       fetchImpl: f.impl,
       now: () => NOW,
     });
-    expect(f.calls.some((c) => c.url === "https://api.github.com/repos/u/r/actions/workflows/pipeline.yml/dispatches")).toBe(true);
+    const dispatch = f.calls.find((c) => c.url === "https://api.github.com/repos/u/r/actions/workflows/pipeline.yml/dispatches")!;
+    expect(dispatch.body).toEqual({ ref: "main", inputs: { manual: "true" } }); // 跑完回报结果
     expect(f.calls.some((c) => c.url.includes("chat/completions"))).toBe(false);
     expect(f.calls.find((c) => c.url.endsWith("/sendMessage"))!.body.text).toContain("已触发");
   });

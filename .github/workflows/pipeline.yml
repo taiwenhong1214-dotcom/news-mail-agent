@@ -20,6 +20,10 @@ on:
         description: "立即生成并发送周报"
         type: boolean
         default: false
+      manual:
+        description: "手动运行：忽略免打扰和合集间隔，跑完在 Telegram 回报结果（Telegram 的 /run 会自动勾上）"
+        type: boolean
+        default: false
 
 # 同一时间只跑一个，后来的排队，避免并发写库
 concurrency:
@@ -81,6 +85,7 @@ jobs:
           args="${{ inputs.stage || 'all' }}"
           if [ "${{ inputs.force_digest }}" = "true" ]; then args="$args --force-digest"; fi
           if [ "${{ inputs.force_weekly }}" = "true" ]; then args="$args --force-weekly"; fi
+          if [ "${{ inputs.manual }}" = "true" ]; then args="$args --manual"; fi
           python -m nma $args
           code=$?
           echo "code=$code" >> "$GITHUB_OUTPUT"

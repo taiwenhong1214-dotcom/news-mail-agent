@@ -87,6 +87,7 @@ class Settings:
     fetch_timeout: float = 10.0
     fetch_concurrency: int = 10
     dry_run: bool = False                # True 时不发 Telegram，只打印
+    manual_run: bool = False             # 用户在 Telegram 发 /run 触发：不受免打扰和合集间隔限制，跑完回报结果
 
     feeds_config: dict = field(default_factory=dict)
     filters_config: dict = field(default_factory=dict)

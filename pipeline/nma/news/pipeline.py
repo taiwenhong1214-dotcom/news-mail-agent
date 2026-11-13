@@ -189,6 +189,7 @@ def score_pending(db: Database, llm: LLMClient, settings: Settings, now: int | N
             log.warning("LLM 结果缺失或无法解析 %d/%d 条，下次重试", len(missing), len(ids))
             _mark_failed(db, missing)
         stats["scored"] += len(results)
+        stats["pushable"] += sum(1 for r in results.values() if r["score"] >= settings.push_threshold)
         stats["parse_failed"] += len(missing)
 
     if stats["llm_errors"] and not stats["scored"]:
@@ -313,6 +314,8 @@ def quiet_window(settings: Settings) -> tuple[int, int] | None:
 
 
 def in_quiet_hours(now: int, settings: Settings) -> bool:
+    if settings.manual_run:  # 用户手动 /run：人在线，不用免打扰
+        return False
     w = quiet_window(settings)
     if w is None:
         return False
@@ -470,8 +473,8 @@ def push_bundle(db: Database, tg: Telegram, settings: Settings, now: int | None 
     if in_quiet_hours(now, settings):
         return {"bundle": "quiet"}
     last = int(_get_state(db, "bundle_last") or 0)
-    # 流水线每 30 分钟一次、启动时间有抖动，留 10 分钟余量
-    if now - last < settings.bundle_interval_hours * 3600 - 600:
+    # 流水线每 30 分钟一次、启动时间有抖动，留 10 分钟余量。手动 /run 时立即结算
+    if not settings.manual_run and now - last < settings.bundle_interval_hours * 3600 - 600:
         return {"bundle": "not_yet"}
     if _digest_pending(db, settings, now):
         return {"bundle": "wait_digest"}

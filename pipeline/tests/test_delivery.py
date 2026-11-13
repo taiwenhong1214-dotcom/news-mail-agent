@@ -146,3 +146,39 @@ def test_telegram_client_returns_ids_and_deletes():
     assert tg.send("hi") and tg.last_message_ids == [77]
     assert tg.delete_messages(list(range(150)))
     assert [p for p, _ in seen] == ["sendMessage", "deleteMessages", "deleteMessages"]   # 每次最多 100 个
+
+
+# ---------------- 手动 /run ----------------
+
+def test_manual_run_ignores_quiet_hours_and_bundle_interval(env):
+    s, db, rules = env
+    night = at(2)
+    _digest_sent(db)
+    _scored(db, s, rules, {"Mid score overnight headline": 7.6}, now=night)
+    db.execute("INSERT INTO app_state (key, value, updated_at) VALUES ('bundle_last', ?, 0)", [str(night - 600)])
+    tg = FakeTG()
+    assert push_bundle(db, tg, s, now=night) == {"bundle": "quiet"}
+    s.manual_run = True
+    assert push_bundle(db, tg, s, now=night) == {"bundle": 1}           # 刚发过合集也立即结算
+    assert "x.com/0" in tg.messages[-1]
+
+
+def test_run_report(env):
+    from nma.report import format_run_report
+    s, _, _ = env
+    s.push_threshold = 7.5
+    base = {"fetch": {"sources": 43, "new": 12, "failed_sources": []},
+            "score": {"candidates": 12, "scored": 12, "pushable": 0}}
+    empty = format_run_report({**base, "push": {"deleted": 0, "pushed": 0, "watches": 0, "bundle": 0}}, [], 41.6, s)
+    assert empty.startswith("✅ <b>流水线跑完</b> · 42 秒")
+    assert "新增 12 条" in empty and "≥7.5 分 0 条" in empty
+    assert "没有新的够推送标准的新闻" in empty and "≥8.5 分且 3 小时内" in empty
+
+    busy = format_run_report({**base, "push": {"pushed": 1, "watch_pushed": 2, "bundle": 4, "deleted": 3},
+                              "digest": {"digest": "sent"}}, [], 60, s)
+    assert "单独 1 条 · 盯梢 2 条 · 快讯合集 4 条" in busy and "删掉 3 条" in busy and "日报已发送" in busy
+    assert "没有新的" not in busy
+
+    failed = format_run_report({"fetch": {"sources": 43, "new": 0, "failed_sources": ["A: timeout"]}},
+                               ["score: LLMError: boom\ntrace"], 5, s)
+    assert failed.startswith("⚠️") and "1 个源失败" in failed and "出错的阶段：score" in failed

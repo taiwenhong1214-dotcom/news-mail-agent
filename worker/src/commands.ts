@@ -75,8 +75,9 @@ export async function handleCommand(text: string, ctx: CmdContext): Promise<bool
     }
 
     case "/run": {
-      const err = await dispatchPipeline(env, {}, ctx.fetchImpl);
-      await tg.sendHtml(chatId, err ? `❌ 触发失败：${escapeHtml(err)}` : "🚀 已触发流水线，大约 3-6 分钟跑完，有高分新闻会直接推送");
+      // manual：流水线跑完会回报结果（没有新闻也会说），并立即发出攒着的快讯合集
+      const err = await dispatchPipeline(env, { manual: "true" }, ctx.fetchImpl);
+      await tg.sendHtml(chatId, err ? `❌ 触发失败：${escapeHtml(err)}` : "🚀 已触发流水线，一般 1-3 分钟跑完，跑完会告诉你结果");
       return true;
     }
 

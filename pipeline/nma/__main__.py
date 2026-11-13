@@ -13,6 +13,7 @@ from .db import DBError, connect
 from .llm import LLMClient
 from .news import prefilter
 from .news.fetch import fetch_items, load_sources
+from .report import format_run_report
 from .news.pipeline import (cleanup_messages, ingest, load_muted, merge_events, push_bundle, push_instant,
                             push_watches, score_pending)
 from .settings import Settings
@@ -37,10 +38,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("stage", nargs="?", default="all", choices=("all", *STAGES))
     ap.add_argument("--force-digest", action="store_true", help="不管时间和是否已发，立即生成并发送日报")
     ap.add_argument("--force-weekly", action="store_true", help="不管时间和是否已发，立即生成并发送周报")
+    ap.add_argument("--manual", action="store_true",
+                    help="用户手动触发（Telegram /run）：忽略免打扰和合集间隔，跑完发一条结果回报")
     ap.add_argument("--dry-run", action="store_true", help="不发 Telegram，只打印")
     ap.add_argument("--sqlite", metavar="PATH", nargs="?", const="", help="用本地 SQLite 代替 D1")
     args = ap.parse_args(argv)
 
+    # Windows 控制台默认 cp1252，dry-run 打印 emoji 会崩
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     for noisy in ("httpx", "httpcore"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
@@ -48,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings.from_env()
     if args.dry_run:
         settings.dry_run = True
+    settings.manual_run = args.manual
     if args.sqlite is not None:
         settings.db_backend = "sqlite"
         if args.sqlite:
@@ -125,6 +133,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if errors:
         tg.alert("News pipeline 出错", "\n\n".join(errors))
+    if args.manual:
+        tg.send(format_run_report(stats, errors, time.time() - started, settings))
 
     if run_id is not None:
         try:
