@@ -12,6 +12,15 @@ log = logging.getLogger(__name__)
 MAX_LEN = 4000  # Telegram 上限 4096，留余量
 
 
+def feedback_keyboard(item_id: int) -> dict:
+    """推送条目下面的 ⭐ / 👍 / 👎 按钮。点击后由 Worker 处理（worker/src/feedback.ts 里有同样的按钮文字）。"""
+    return {"inline_keyboard": [[
+        {"text": "⭐ 收藏", "callback_data": f"fb:{item_id}:s"},
+        {"text": "👍", "callback_data": f"fb:{item_id}:u"},
+        {"text": "👎", "callback_data": f"fb:{item_id}:d"},
+    ]]}
+
+
 def esc(s: str) -> str:
     return html.escape(s or "", quote=False)
 
@@ -47,13 +56,15 @@ class Telegram:
             self.client = httpx.Client(timeout=20.0)
         self.sent = 0
 
-    def send(self, text: str, preview: bool = False) -> bool:
+    def send(self, text: str, preview: bool = False, reply_markup: dict | None = None) -> bool:
         ok = True
-        for part in split_message(text):
-            ok = self._send_one(part, preview) and ok
+        parts = split_message(text)
+        for i, part in enumerate(parts):
+            # 按钮只挂在最后一段上
+            ok = self._send_one(part, preview, reply_markup if i == len(parts) - 1 else None) and ok
         return ok
 
-    def _send_one(self, text: str, preview: bool) -> bool:
+    def _send_one(self, text: str, preview: bool, reply_markup: dict | None = None) -> bool:
         if self.dry_run:
             print("----- [telegram dry-run] -----\n" + text)
             self.sent += 1
@@ -64,6 +75,8 @@ class Telegram:
             "parse_mode": "HTML",
             "link_preview_options": {"is_disabled": not preview},
         }
+        if reply_markup:
+            body["reply_markup"] = reply_markup
         for attempt in range(3):
             try:
                 r = self.client.post(self.url, json=body)

@@ -10,10 +10,14 @@ on:
       stage:
         description: "要跑的阶段"
         type: choice
-        options: [all, fetch, score, merge, push, digest]
+        options: [all, fetch, score, merge, push, digest, weekly]
         default: all
       force_digest:
         description: "立即生成并发送日报"
+        type: boolean
+        default: false
+      force_weekly:
+        description: "立即生成并发送周报"
         type: boolean
         default: false
 
@@ -66,10 +70,13 @@ jobs:
           PUSH_MAX_PER_RUN: ${{ vars.PUSH_MAX_PER_RUN }}
           PUSH_MAX_AGE_HOURS: ${{ vars.PUSH_MAX_AGE_HOURS }}
           DIGEST_HOUR_MYT: ${{ vars.DIGEST_HOUR_MYT }}
+          WATCH_MIN_SCORE: ${{ vars.WATCH_MIN_SCORE }}
+          WEEKLY_HOUR_MYT: ${{ vars.WEEKLY_HOUR_MYT }}
         run: |
           set +e
           args="${{ inputs.stage || 'all' }}"
           if [ "${{ inputs.force_digest }}" = "true" ]; then args="$args --force-digest"; fi
+          if [ "${{ inputs.force_weekly }}" = "true" ]; then args="$args --force-weekly"; fi
           python -m nma $args
           code=$?
           echo "code=$code" >> "$GITHUB_OUTPUT"

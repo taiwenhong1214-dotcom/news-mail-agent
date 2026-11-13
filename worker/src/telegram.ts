@@ -101,12 +101,23 @@ export class Telegram {
     }
   }
 
-  async setWebhook(url: string, secret: string): Promise<unknown> {
+  /** 按钮点击后必须回应，否则按钮上会一直转圈；text 显示为顶部的短提示 */
+  async answerCallback(callbackId: string, text?: string): Promise<void> {
+    await this.call("answerCallbackQuery", { callback_query_id: callbackId, ...(text ? { text } : {}) });
+  }
+
+  async editReplyMarkup(chatId: number | string, messageId: number, replyMarkup: unknown): Promise<void> {
+    // 内容没变时 Telegram 返回 400 "message is not modified"，无所谓
+    await this.call("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: replyMarkup });
+  }
+
+  /** allowed_updates 要包含 callback_query，推送下面的按钮才能用 */
+  async setWebhook(url: string, secret: string, dropPending = true): Promise<unknown> {
     const r = await this.call("setWebhook", {
       url,
       secret_token: secret,
-      allowed_updates: ["message"],
-      drop_pending_updates: true,
+      allowed_updates: ["message", "callback_query"],
+      drop_pending_updates: dropPending,
     });
     return r ? r.json() : { ok: true, dry_run: true };
   }

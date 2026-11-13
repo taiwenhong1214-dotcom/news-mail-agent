@@ -28,33 +28,42 @@ def make_item(url, title, summary="", group="devops", tier="T1", age_h=1, source
 class FakeLLM:
     """按 id 返回固定分数；可以模拟坏 JSON 或调用失败。"""
 
-    def __init__(self, mode="ok", scores=None, groups=None):
+    def __init__(self, mode="ok", scores=None, groups=None, jobs=None, weekly=None):
         self.mode, self.scores, self.calls = mode, scores or {}, 0
         self.groups = groups or []  # 事件合并：按标题分组
+        self.jobs = jobs or {}      # 标题 -> jobs 字段
+        self.weekly = weekly        # 周报的原始输出（字符串）
+        self.prompts = []
 
     def chat(self, messages, temperature=0.2):
         self.calls += 1
+        content = messages[0]["content"]
+        self.prompts.append(content)
         if self.mode == "error":
             raise LLMError("boom")
         if self.mode == "garbage":
             return "抱歉，我不能输出 JSON"
-        content = messages[0]["content"]
+        if "## 本周新闻" in content:
+            return self.weekly or "{}"
         if "## 新闻列表" in content:
             items = json.loads(content.split("## 新闻列表", 1)[1])
             by_title = {it["title"]: it["id"] for it in items}
             return json.dumps({"groups": [[by_title[t] for t in g if t in by_title] for g in self.groups]})
         items = json.loads(content.split("## 待评分新闻", 1)[1])
         out = [{"id": it["id"], "score": self.scores.get(it["title"], 5), "category": it["group"],
-                "summary_zh": "摘要" + it["title"][:10], "reason": "理由"} for it in items]
+                "summary_zh": "摘要" + it["title"][:10], "reason": "理由",
+                **({"jobs": self.jobs[it["title"]]} if it["title"] in self.jobs else {})} for it in items]
         return "```json\n" + json.dumps({"items": out}, ensure_ascii=False) + "\n```"
 
 
 class FakeTG:
     def __init__(self):
         self.messages = []
+        self.markups = []
 
-    def send(self, text, preview=False):
+    def send(self, text, preview=False, reply_markup=None):
         self.messages.append(text)
+        self.markups.append(reply_markup)
         return True
 
 

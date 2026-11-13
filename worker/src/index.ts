@@ -1,14 +1,69 @@
 import { loadHistory, runAgent, saveTurn } from "./agent";
 import { handleCommand } from "./commands";
 import type { Env } from "./env";
+import { handleFeedback, type CallbackQuery } from "./feedback";
 import { dispatchPipeline } from "./github";
 import { LLM } from "./llm";
 import { Telegram } from "./telegram";
-import { escapeHtml, nowSec, safeEqual } from "./util";
+import { escapeHtml, nowSec, safeEqual, truncate } from "./util";
+
+interface TgEntity {
+  type: string;
+  offset: number; // UTF-16 单位，和 JS 字符串下标一致
+  length: number;
+  url?: string;
+}
+
+export interface TgMessage {
+  message_id?: number;
+  chat: { id: number };
+  text?: string;
+  caption?: string;
+  entities?: TgEntity[];
+  caption_entities?: TgEntity[];
+  reply_to_message?: TgMessage;
+}
 
 interface TgUpdate {
   update_id: number;
-  message?: { chat: { id: number }; text?: string; caption?: string };
+  message?: TgMessage;
+  callback_query?: CallbackQuery;
+}
+
+/** 被回复消息最多带多少字给 LLM（日报约 3000 字，要能整份带上） */
+const QUOTE_MAX_CHARS = 3500;
+
+/**
+ * 把消息还原成带链接的 Markdown。推送和日报里的链接是 text_link 实体（<a href> 发出去的），
+ * 链接地址只在 entities 里，message.text 里只有链接文字。
+ */
+export function messageWithLinks(m: TgMessage): string {
+  const text = m.text ?? m.caption ?? "";
+  const ents = (m.entities ?? m.caption_entities ?? [])
+    .filter((e) => e.type === "text_link" && e.url)
+    .sort((a, b) => a.offset - b.offset);
+  let out = "";
+  let pos = 0;
+  for (const e of ents) {
+    if (e.offset < pos) continue; // 重叠实体，跳过
+    out += text.slice(pos, e.offset) + `[${text.slice(e.offset, e.offset + e.length)}](${e.url})`;
+    pos = e.offset + e.length;
+  }
+  return out + text.slice(pos);
+}
+
+/** 回复某条消息时：给 LLM 的完整输入 + 存进历史的简短版本（历史里不存整段引用，免得 20 轮历史塞满日报） */
+export function withQuote(text: string, msg: TgMessage): { input: string; historyText: string } {
+  const reply = msg.reply_to_message;
+  if (!reply) return { input: text, historyText: text };
+  const quoted = truncate(messageWithLinks(reply).trim(), QUOTE_MAX_CHARS);
+  if (!quoted) return { input: text, historyText: text };
+  const link = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/.exec(quoted);
+  const brief = link ? `[${truncate(link[1], 80)}](${link[2]})` : truncate(quoted.replace(/\s+/g, " "), 80);
+  return {
+    input: `（我在回复下面这条消息）\n"""\n${quoted}\n"""\n\n${text}`,
+    historyText: `（回复：${brief}）\n${text}`,
+  };
 }
 
 export interface Deps {
@@ -45,9 +100,12 @@ export async function handleWebhook(req: Request, env: Env, deps: Deps = default
     return new Response("bad request", { status: 400 });
   }
   const msg = update.message;
+  const cq = update.callback_query;
   const text = (msg?.text ?? msg?.caption ?? "").trim();
+  const allowed = allowedChatIds(env);
   // 非白名单 / 非文字消息：直接 200，不回应（不暴露 bot 存在）
-  if (!msg || !text || !allowedChatIds(env).has(msg.chat.id)) return new Response("ok");
+  const fromChat = msg ? (text ? msg.chat.id : null) : cq ? (cq.message?.chat.id ?? cq.from.id) : null;
+  if (fromChat === null || !allowed.has(fromChat)) return new Response("ok");
 
   const now = deps.now();
   // Telegram 超时会重发同一个 update：用 update_id 去重
@@ -59,12 +117,24 @@ export async function handleWebhook(req: Request, env: Env, deps: Deps = default
     await env.DB.prepare("DELETE FROM tg_updates WHERE created_at < ?").bind(now - 7 * 86400).run();
   }
 
-  const chatId = msg.chat.id;
   const tg = new Telegram(env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_DRY_RUN === "1", deps.fetchImpl);
+  if (cq) {
+    try {
+      await handleFeedback(cq, env.DB, tg, now);
+    } catch (e) {
+      console.error("feedback failed", e);
+      await tg.answerCallback(cq.id, "⚠️ 没记上，稍后再试").catch(() => {});
+    }
+    return new Response("ok");
+  }
+
+  const chatId = fromChat;
+  const origin = new URL(req.url).origin;
   try {
-    if (text.startsWith("/") && (await handleCommand(text, { env, tg, chatId, now, fetchImpl: deps.fetchImpl }))) {
+    if (text.startsWith("/") && (await handleCommand(text, { env, tg, chatId, now, fetchImpl: deps.fetchImpl, origin }))) {
       return new Response("ok");
     }
+    const { input, historyText } = withQuote(text, msg!);
     await tg.typing(chatId);
     const llm = new LLM({
       baseUrl: env.LLM_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -74,14 +144,16 @@ export async function handleWebhook(req: Request, env: Env, deps: Deps = default
       fetchImpl: deps.fetchImpl,
     });
     const history = await loadHistory(env.DB, chatId);
-    const { reply } = await runAgent(text, {
+    const notices: string[] = [];
+    const { reply } = await runAgent(input, {
       llm,
       history,
-      toolCtx: { env, now, fetchImpl: deps.fetchImpl },
+      toolCtx: { env, now, fetchImpl: deps.fetchImpl, searchUsage: { searches: 0 }, notices },
       onToolRound: () => tg.typing(chatId),
     });
     await tg.sendMarkdown(chatId, reply);
-    await saveTurn(env.DB, chatId, text, reply, now);
+    for (const n of notices) await tg.sendHtml(chatId, escapeHtml(n));
+    await saveTurn(env.DB, chatId, historyText, reply, now);
   } catch (e) {
     console.error("handle message failed", e);
     const detail = e instanceof Error ? e.message : String(e);

@@ -1,6 +1,6 @@
 # News Agent
 
-个人新闻助手：GitHub Actions 每 30 分钟抓取 RSS → 判重 → 预筛 → LLM 打分 → 高分新闻即时推送到 Telegram，每天 08:00（MYT）发一份日报；还可以在 Telegram 里直接和它对话：查新闻、联网搜索、管理信源。
+个人新闻助手：GitHub Actions 每 30 分钟抓取 RSS → 判重 → 预筛 → LLM 打分 → 高分新闻即时推送到 Telegram，每天 08:00（MYT）发一份日报，每周日 20:00 发周报；还可以在 Telegram 里直接和它对话：查新闻、联网搜索、读原文、盯梢话题、管理信源。
 零服务器、零常驻电脑，只付 LLM API 费用（Gemini 有免费额度）。
 
 > 当前进度：阶段 1（新闻流水线）和阶段 3（Telegram 对话 Worker）已完成；邮件功能暂不做。
@@ -21,7 +21,8 @@ LLM 打分（10 条一批，prompts/score.md）→ score / 分类 / 中文摘要
         ▼
 LLM 事件合并（prompts/events.md）：同一事件的不同角度报道归为一条
         ▼
-score ≥ 7 即时推送（每次最多 8 条，只推 12h 内的）  +  08:00 MYT 日报
+score ≥ 7 即时推送（每次最多 8 条，只推 12h 内的，带 ⭐/👍/👎 按钮）
+  + 盯梢话题命中就推（≥4 分即可）  +  08:00 MYT 日报  +  周日 20:00 MYT 周报
 ```
 
 所有条目（包括被过滤的）都写入 D1，对话 bot 从这里检索。
@@ -94,7 +95,7 @@ npx wrangler d1 migrations apply news-agent --remote
 ```bash
 cd worker
 npm install
-npx wrangler d1 migrations apply news-agent --remote   # 新增的 0002_app_state
+npx wrangler d1 migrations apply news-agent --remote   # 应用所有新迁移（0002、0003 …）
 
 # 逐个设置密钥（每条命令会提示你粘贴值）
 npx wrangler secret put TELEGRAM_BOT_TOKEN
@@ -111,15 +112,27 @@ npx wrangler deploy                               # 输出里有 Worker 地址�
 
 Worker 的非敏感配置（对话模型、仓库名等）在 `worker/wrangler.toml` 的 `[vars]` 里。
 
-**Bot 用法**：直接用中文提问，例如「今天有什么大事」「最近 AI 基础设施有什么新闻」「搜一下马来西亚数据中心招聘」「屏蔽 crypto」「把 https://xxx/feed 加到 DevOps」。快捷命令：
+**Bot 用法**：直接用中文提问，例如「今天有什么大事」「最近 AI 基础设施有什么新闻」「搜一下马来西亚数据中心招聘」「屏蔽 crypto」「把 https://xxx/feed 加到 DevOps」。
+
+- **联网搜索**：说「搜一下 / 查一下 / 最新」会直接联网（Tavily），问最新进展时只搜最近一天或一周，需要细节时用 `read_page` 打开 1–2 个结果读全文。直接发链接也能读。`read_page` 用免 key 的 [Jina Reader](https://jina.ai/reader/)，失败时直接抓网页，不占 Tavily 额度。
+- **省搜索额度**：每条消息最多真正搜 2 次；同样的搜索 6 小时内走 D1 缓存（只要最近一天的结果时缓存 2 小时）；用量以 Tavily `/usage` 为准，每小时同步一次。用到 80% 时 bot 提醒一次，用完就只查新闻库，等 Tavily 账单周期重置后自动恢复。`/status` 能看本周期用量。
+- **回复推送追问**：回复某条推送或日报，说「展开讲讲」「对大马有什么影响」，bot 会读原文再回答。
+- **按钮**：推送下面有 ⭐ 收藏 / 👍 / 👎。收藏用 `/saved` 看；👍 / 👎 会作为读者偏好样本带进打分 prompt（最近 60 天，各取 10 条，少于 3 条不生效）；`/status` 会列出 👎 最多的信源。
+- **盯梢**：「帮我盯着 Kubernetes 1.36」「盯着 Google 大马数据中心」。之后抓到命中的新闻就推送，只要 ≥4 分（不用到 7 分），默认 30 天后过期，`/settings` 里能看到。
+- **周报**：每周日 20:00 MYT 发：本周 5 件大事 + 趋势判断、各分类条数和上周对比、大马科技招聘雷达（扩张 / 裁员 / 新投资，打分时顺带抽取）。错过 24 小时就跳过这一周；Actions 里勾选 `force_weekly` 可以立即发一份。
+
+快捷命令：
 
 | 命令 | 作用 |
 |---|---|
 | `/digest [YYYY-MM-DD]` | 看日报（默认今天） |
+| `/weekly` | 看最近一份周报 |
+| `/saved` | 收藏的新闻（稍后读） |
 | `/run` | 立即跑一次流水线 |
-| `/status` | 上次运行情况、待打分积压 |
-| `/settings` | 对话里添加的信源和屏蔽词 |
+| `/status` | 上次运行情况、待打分积压、近 30 天反馈、联网搜索用量 |
+| `/settings` | 对话里添加的信源、屏蔽词和盯梢 |
 | `/reset` | 清空对话记忆（默认保留最近 20 轮） |
+| `/webhook` | 重新注册 webhook（升级后推送按钮点了没反应时发一次） |
 
 ## 本地开发
 
@@ -132,7 +145,8 @@ cp .env.example .env              # 至少填 LLM_API_KEY
 cd pipeline
 python -m pytest                  # 单元测试 + 端到端测试（SQLite + 假 LLM）
 python -m nma all --sqlite --dry-run --force-digest   # 真实抓取和打分，写本地 SQLite，消息只打印不发送
-python -m nma fetch --sqlite      # 只跑某一个阶段：fetch / score / merge / push / digest
+python -m nma fetch --sqlite      # 只跑某一个阶段：fetch / score / merge / push / digest / weekly
+python -m nma weekly --sqlite --dry-run --force-weekly   # 立即生成一份周报看看
 ```
 
 Worker：
@@ -154,8 +168,9 @@ npx wrangler dev --local          # 本地启动；密钥写在 worker/.dev.vars
 |---|---|
 | 信源 | `config/feeds.yaml`。`tier: T1/T2` 是信源权重；`original_link: true` 用于聚合站，从摘要里取原文链接；也支持 `rsshub:/路由` |
 | 过滤词 | `config/filters.yaml`。`block` 是全局黑名单，`require_any` 是分组白名单 |
-| 打分标准、读者画像 | `prompts/score.md` |
+| 打分标准、读者画像、招聘信息抽取 | `prompts/score.md` |
 | 怎样算"同一事件" | `prompts/events.md` |
+| 周报的大事和趋势 | `prompts/weekly.md` |
 | 对话 bot 的人设和回答风格 | `prompts/chat_system.md`（改完需要 `npx wrangler deploy`） |
 | 推送阈值、频率等 | GitHub Variables 或环境变量，完整列表见 `.env.example` |
 
@@ -163,7 +178,8 @@ npx wrangler dev --local          # 本地启动；密钥写在 worker/.dev.vars
 
 - **Gemini**：每 80 条约 2 万 token。按每天 500 条新条目算，约 13 万 token/天，在免费额度内；付费的话每月也不到 1 美元。
 - **D1 免费版**：每天约几千行写入（上限 10 万），每年约 300MB（上限 5GB）。
-- **Workers / Tavily**：Workers 免费版每天 10 万次请求；Tavily 免费额度每月 1000 次搜索，只在 bot 判断需要联网时才调用。
+- **Gemini 新增开销**：有反馈样本时每批打分多约 500 token，按每天约 50 批算多 2–3 万 token；周报每周 1 次调用。都在免费额度内。
+- **Workers / Tavily**：Workers 免费版每天 10 万次请求；Tavily 免费额度每月 1000 次搜索（每次 basic 搜索 1 credit），有每条消息上限、缓存和用完后的降级，见上面「省搜索额度」。
 - **Actions**：公开仓库不限分钟数。Gemini 正常时每次运行 1–2 分钟；主模型过载时会自动切到备用模型，最长约 6 分钟。
 
 ## 目录
@@ -171,17 +187,20 @@ npx wrangler dev --local          # 本地启动；密钥写在 worker/.dev.vars
 ```
 .github/workflows/  pipeline.yml（定时流水线）、ci.yml（测试）
 config/             feeds.yaml、filters.yaml
-prompts/            score.md、events.md、chat_system.md
+prompts/            score.md、events.md、weekly.md、chat_system.md
 migrations/         D1 schema
 pipeline/nma/       Python 流水线
-  news/             fetch、normalize、simhash、prefilter、pipeline（入库 / 打分 / 合并 / 推送）
+  news/             fetch、normalize、simhash、prefilter、pipeline（入库 / 打分 / 合并 / 推送 / 盯梢）
   digest.py         日报
+  weekly.py         周报
   llm.py            OpenAI 兼容客户端：重试、备用模型、JSON 容错解析
   db.py             D1 HTTP API / SQLite
 worker/src/         Cloudflare Worker（TypeScript）
   index.ts          webhook / setup / cron 入口
   agent.ts          function calling 循环、对话历史
-  tools.ts          search_news、top_news、get_digest、web_search、add_feed 等工具
-  commands.ts       /digest /run /status 等命令
+  tools.ts          search_news、top_news、get_digest、read_page、watch_topic、add_feed 等工具
+  search.ts         web_search（Tavily）：每条消息上限、缓存、额度同步和降级
+  feedback.ts       推送按钮（⭐ / 👍 / 👎）回调
+  commands.ts       /digest /weekly /saved /run /status 等命令
 docs/ARCHITECTURE.md
 ```

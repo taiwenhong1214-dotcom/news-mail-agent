@@ -284,5 +284,25 @@ def validate_scores(
             "category": cat,
             "summary_zh": summary,
             "reason": truncate(it.get("reason"), 30),
+            "jobs": validate_jobs(it.get("jobs")),
         }
+    return out
+
+
+JOB_ACTIONS = ("hiring", "layoff", "investment")
+
+
+def validate_jobs(v: Any) -> dict | None:
+    """打分时顺带抽取的大马科技招聘信息：{company, action, scale, location}。不合格返回 None。"""
+    if not isinstance(v, dict):
+        return None
+    company = truncate(v.get("company"), 40)
+    action = str(v.get("action") or "").strip().lower()
+    if not company or action not in JOB_ACTIONS:
+        return None
+    out = {"company": company, "action": action}
+    for key in ("scale", "location"):
+        val = truncate(v.get(key), 30)
+        if val and val.lower() not in ("null", "none", "n/a", "未知", "无"):
+            out[key] = val
     return out

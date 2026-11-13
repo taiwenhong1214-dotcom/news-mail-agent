@@ -72,6 +72,11 @@ class Settings:
     push_max_age_hours: int = 12         # 超过这个年龄的高分条目不即时推送，只进日报
     digest_hour_myt: int = 8
     digest_top_n: int = 10
+    watch_min_score: float = 4.0         # 盯梢命中也要 ≥ 此分，挡掉软文和标题党
+    watch_max_per_run: int = 5           # 盯梢推送每次最多几条，话题太宽时不刷屏
+    feedback_samples: int = 10           # 打分时带上最近多少条 👍 和多少条 👎 的标题
+    weekly_weekday: int = 6              # 周报：星期几发（Python weekday，0 = 周一，6 = 周日）
+    weekly_hour_myt: int = 20
     fetch_timeout: float = 10.0
     fetch_concurrency: int = 10
     dry_run: bool = False                # True 时不发 Telegram，只打印
@@ -104,6 +109,8 @@ class Settings:
             push_max_per_run=_env_int("PUSH_MAX_PER_RUN", cls.push_max_per_run),
             push_max_age_hours=_env_int("PUSH_MAX_AGE_HOURS", cls.push_max_age_hours),
             digest_hour_myt=_env_int("DIGEST_HOUR_MYT", cls.digest_hour_myt),
+            watch_min_score=_env_float("WATCH_MIN_SCORE", cls.watch_min_score),
+            weekly_hour_myt=_env_int("WEEKLY_HOUR_MYT", cls.weekly_hour_myt),
             dry_run=_env("DRY_RUN", "0") in ("1", "true", "yes"),
         )
         s.feeds_config = load_yaml(CONFIG_DIR / "feeds.yaml")

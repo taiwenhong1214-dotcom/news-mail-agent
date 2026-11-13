@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections import Counter
 
 from ..db import Database, chunked, insert_rows, select_in
 from ..llm import LLMClient, LLMError, extract_groups, extract_json_items, validate_scores
 from ..settings import Settings, load_prompt
-from ..telegram import Telegram, esc
+from ..telegram import Telegram, esc, feedback_keyboard
 from . import prefilter
 from .fetch import Item
 from .simhash import SimIndex, from_hex, to_hex
@@ -132,7 +133,11 @@ def score_pending(db: Database, llm: LLMClient, settings: Settings, now: int | N
     since = now - settings.window_hours * 3600
     group_names = settings.group_names()
     categories = [*group_names.values(), "其他"]
-    template = load_prompt("score.md").replace("{{categories}}", " / ".join(categories))
+    template = (
+        load_prompt("score.md")
+        .replace("{{categories}}", " / ".join(categories))
+        .replace("{{preferences}}", preference_section(db, settings, now))
+    )
 
     rows = db.query(
         "SELECT id, title, summary, source, feed_group, tier FROM news_items "
@@ -173,8 +178,9 @@ def score_pending(db: Database, llm: LLMClient, settings: Settings, now: int | N
         for iid, res in results.items():
             db.execute(
                 "UPDATE news_items SET status = 'scored', score = ?, category = ?, summary_zh = ?, "
-                "reason = ?, llm_attempts = llm_attempts + 1 WHERE id = ?",
-                [res["score"], res["category"], res["summary_zh"], res["reason"], iid],
+                "reason = ?, jobs = ?, llm_attempts = llm_attempts + 1 WHERE id = ?",
+                [res["score"], res["category"], res["summary_zh"], res["reason"],
+                 json.dumps(res["jobs"], ensure_ascii=False) if res.get("jobs") else None, iid],
             )
         missing = ids - results.keys()
         if missing:
@@ -186,6 +192,38 @@ def score_pending(db: Database, llm: LLMClient, settings: Settings, now: int | N
     if stats["llm_errors"] and not stats["scored"]:
         raise LLMError(f"本次打分全部失败（{stats['llm_errors']} 次调用错误）")
     return dict(stats)
+
+
+def preference_section(db: Database, settings: Settings, now: int) -> str:
+    """读者最近的 👍 / 👎（⭐ 收藏也算 👍），作为打分参考。样本太少时不加，避免一两次点击带偏打分。"""
+    if settings.feedback_samples <= 0:
+        return ""
+    try:
+        rows = db.query(
+            "SELECT n.title, n.source, f.vote, f.saved_at FROM feedback f JOIN news_items n ON n.id = f.item_id "
+            "WHERE f.updated_at >= ? AND (f.vote IS NOT NULL OR f.saved_at IS NOT NULL) "
+            "ORDER BY f.updated_at DESC LIMIT ?",
+            [now - 60 * 86400, settings.feedback_samples * 4],
+        )
+    except Exception as e:  # 表还没建（迁移没跑）时不影响打分
+        log.warning("读取 feedback 失败: %s", e)
+        return ""
+    up = [r for r in rows if r["vote"] == 1 or (r["vote"] is None and r["saved_at"])][: settings.feedback_samples]
+    down = [r for r in rows if r["vote"] == -1][: settings.feedback_samples]
+    if len(up) + len(down) < 3:
+        return ""
+    fmt = lambda r: f"- {r['title'][:100]}（{r['source']}）"  # noqa: E731
+    lines = ["", "## 读者最近的反馈（只用来微调分数）"]
+    if up:
+        lines += ["读者点了 👍 或收藏的：", *map(fmt, up)]
+    if down:
+        lines += ["读者点了 👎 的：", *map(fmt, down)]
+    lines += [
+        "- 和 👍 同类的新闻可以加 1 分以内，和 👎 同类的（同一类话题、同一种写法）减 1-2 分",
+        "- 只是沾边的不用调整；重大事件照常给高分",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def merge_events(db: Database, llm: LLMClient, settings: Settings, now: int | None = None) -> dict:
@@ -273,7 +311,73 @@ def push_instant(db: Database, tg: Telegram, settings: Settings, now: int | None
     )
     pushed = 0
     for r in rows:
-        if tg.send(format_item(r, now=now)):
+        if tg.send(format_item(r, now=now), reply_markup=feedback_keyboard(r["id"])):
             db.execute("UPDATE news_items SET pushed_at = ? WHERE id = ?", [now, r["id"]])
             pushed += 1
     return {"pushed": pushed}
+
+
+# ---------------- 话题盯梢 ----------------
+
+_ASCII_WORD = re.compile(r"^[0-9a-z][0-9a-z.+#_-]*$")
+
+
+def _term_hit(term: str, text: str) -> bool:
+    """英文 / 数字词按词边界匹配（避免 AI 命中 said），中文按子串匹配。text 已转小写。"""
+    if _ASCII_WORD.match(term):
+        return re.search(rf"(?<![0-9a-z]){re.escape(term)}(?![0-9a-z])", text) is not None
+    return term in text
+
+
+def watch_matches(keywords: list[str], text: str) -> bool:
+    """keywords 里任一组命中即可；一组里空格分隔的词必须全部出现。"""
+    text = text.lower()
+    for phrase in keywords:
+        terms = [t for t in str(phrase).lower().split() if t]
+        if terms and all(_term_hit(t, text) for t in terms):
+            return True
+    return False
+
+
+def push_watches(db: Database, tg: Telegram, settings: Settings, now: int | None = None) -> dict:
+    """盯梢：已打分、还没推送、在盯梢创建之后入库的条目，命中关键词就推送，不管分数到没到推送阈值。
+    放在 push_instant 之后跑：已经按分数推过的不会再推一次。"""
+    now = int(time.time()) if now is None else now
+    try:
+        watches = db.query("SELECT id, name, keywords, created_at FROM watches WHERE expires_at > ?", [now])
+    except Exception as e:
+        log.warning("读取 watches 失败: %s", e)
+        return {"watches": 0}
+    if not watches:
+        return {"watches": 0}
+    for w in watches:
+        try:
+            w["kw"] = [k for k in json.loads(w["keywords"]) if isinstance(k, str)]
+        except (TypeError, ValueError):
+            w["kw"] = []
+
+    rows = db.query(
+        "SELECT id, url, title, summary, source, source_count, score, category, summary_zh, reason, "
+        "published_at, fetched_at FROM news_items WHERE status = 'scored' AND pushed_at IS NULL "
+        "AND score >= ? AND published_at >= ? AND fetched_at >= ? "
+        "ORDER BY score DESC, published_at DESC LIMIT 300",
+        [settings.watch_min_score, now - settings.push_max_age_hours * 3600,
+         min(w["created_at"] for w in watches)],
+    )
+    pushed, hits = 0, Counter()
+    for r in rows:
+        if pushed >= settings.watch_max_per_run:
+            break
+        text = " ".join(str(r.get(k) or "") for k in ("title", "summary_zh", "summary"))
+        matched = [w for w in watches if r["fetched_at"] >= w["created_at"] and watch_matches(w["kw"], text)]
+        if not matched:
+            continue
+        head = "👀 <b>盯梢</b> · " + "、".join(esc(w["name"]) for w in matched)
+        if tg.send(head + "\n" + format_item(r, now=now), reply_markup=feedback_keyboard(r["id"])):
+            db.execute("UPDATE news_items SET pushed_at = ? WHERE id = ?", [now, r["id"]])
+            pushed += 1
+            for w in matched:
+                hits[w["id"]] += 1
+    for wid, n in hits.items():
+        db.execute("UPDATE watches SET hits = hits + ?, last_hit_at = ? WHERE id = ?", [n, now, wid])
+    return {"watches": len(watches), "watch_pushed": pushed}

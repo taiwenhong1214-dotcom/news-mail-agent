@@ -1,4 +1,4 @@
-"""入口：python -m nma [all|fetch|score|push|digest] [--force-digest] [--dry-run] [--sqlite]"""
+"""入口：python -m nma [all|fetch|score|merge|push|digest|weekly] [--force-digest] [--force-weekly] [--dry-run] [--sqlite]"""
 from __future__ import annotations
 
 import argparse
@@ -8,18 +8,18 @@ import sys
 import time
 import traceback
 
-from . import digest
+from . import digest, weekly
 from .db import DBError, connect
 from .llm import LLMClient
 from .news import prefilter
 from .news.fetch import fetch_items, load_sources
-from .news.pipeline import ingest, load_muted, merge_events, push_instant, score_pending
+from .news.pipeline import ingest, load_muted, merge_events, push_instant, push_watches, score_pending
 from .settings import Settings
 from .telegram import Telegram
 
 log = logging.getLogger("nma")
 
-STAGES = ("fetch", "score", "merge", "push", "digest")
+STAGES = ("fetch", "score", "merge", "push", "digest", "weekly")
 
 
 def _make_llm(settings: Settings) -> LLMClient:
@@ -35,6 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="nma")
     ap.add_argument("stage", nargs="?", default="all", choices=("all", *STAGES))
     ap.add_argument("--force-digest", action="store_true", help="不管时间和是否已发，立即生成并发送日报")
+    ap.add_argument("--force-weekly", action="store_true", help="不管时间和是否已发，立即生成并发送周报")
     ap.add_argument("--dry-run", action="store_true", help="不发 Telegram，只打印")
     ap.add_argument("--sqlite", metavar="PATH", nargs="?", const="", help="用本地 SQLite 代替 D1")
     args = ap.parse_args(argv)
@@ -99,8 +100,15 @@ def main(argv: list[str] | None = None) -> int:
                     st = merge_events(db, llm, settings)
             elif stage == "push":
                 st = push_instant(db, tg, settings)
-            else:
+                st.update(push_watches(db, tg, settings))  # 分数推送之后再跑，已推送的不会重复
+            elif stage == "digest":
                 st = digest.maybe_send_digest(db, tg, settings, force=args.force_digest)
+            else:
+                def get_llm() -> LLMClient:
+                    nonlocal llm
+                    llm = llm or _make_llm(settings)
+                    return llm
+                st = weekly.maybe_send_weekly(db, tg, settings, get_llm, force=args.force_weekly)
             st["seconds"] = round(time.time() - t0, 1)
             stats[stage] = st
             log.info("%s: %s", stage, json.dumps({k: v for k, v in st.items() if k != "failed_sources"},
