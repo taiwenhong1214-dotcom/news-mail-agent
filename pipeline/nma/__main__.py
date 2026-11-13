@@ -13,7 +13,8 @@ from .db import DBError, connect
 from .llm import LLMClient
 from .news import prefilter
 from .news.fetch import fetch_items, load_sources
-from .news.pipeline import ingest, load_muted, merge_events, push_instant, push_watches, score_pending
+from .news.pipeline import (cleanup_messages, ingest, load_muted, merge_events, push_bundle, push_instant,
+                            push_watches, score_pending)
 from .settings import Settings
 from .telegram import Telegram
 
@@ -99,8 +100,10 @@ def main(argv: list[str] | None = None) -> int:
                     llm = llm or _make_llm(settings)
                     st = merge_events(db, llm, settings)
             elif stage == "push":
-                st = push_instant(db, tg, settings)
-                st.update(push_watches(db, tg, settings))  # 分数推送之后再跑，已推送的不会重复
+                st = cleanup_messages(db, tg, settings)    # 先删 24 小时前的旧推送
+                st.update(push_instant(db, tg, settings))  # ≥8.5 分单独推
+                st.update(push_watches(db, tg, settings))  # 盯梢命中单独推（已推过的不重复）
+                st.update(push_bundle(db, tg, settings))   # 其余 ≥7 分每 3 小时合成一条
             elif stage == "digest":
                 st = digest.maybe_send_digest(db, tg, settings, force=args.force_digest)
             else:

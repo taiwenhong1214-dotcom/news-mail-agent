@@ -6,8 +6,10 @@ import logging
 import re
 import time
 from collections import Counter
+from datetime import datetime
 
 from ..db import Database, chunked, insert_rows, select_in
+from ..digest import MYT
 from ..llm import LLMClient, LLMError, extract_groups, extract_json_items, validate_scores
 from ..settings import Settings, load_prompt
 from ..telegram import Telegram, esc, feedback_keyboard
@@ -301,20 +303,57 @@ def _ago(seconds: int) -> str:
     return f"{seconds // 86400} 天前"
 
 
+def quiet_window(settings: Settings) -> tuple[int, int] | None:
+    """解析 "23-8" 这样的免打扰时段（MYT 小时）；"off" / 格式不对返回 None。"""
+    try:
+        a, b = (int(x) for x in settings.quiet_hours.split("-"))
+    except (ValueError, AttributeError):
+        return None
+    return (a, b) if 0 <= a < 24 and 0 <= b < 24 and a != b else None
+
+
+def in_quiet_hours(now: int, settings: Settings) -> bool:
+    w = quiet_window(settings)
+    if w is None:
+        return False
+    h = datetime.fromtimestamp(now, MYT).hour
+    start, end = w
+    return (h >= start or h < end) if start > end else (start <= h < end)
+
+
+def record_sent(db: Database, message_ids: list[int], item_id: int | None, kind: str, now: int) -> None:
+    """记下推送消息的 id，24 小时后自动删除用。dry-run 的负数 id 不记。"""
+    ids = [m for m in message_ids if m > 0]
+    if not ids:
+        return
+    try:
+        insert_rows(db, "sent_messages", ("message_id", "item_id", "kind", "sent_at"),
+                    [(m, item_id, kind, now) for m in ids])
+    except Exception as e:  # 表还没建时不影响推送
+        log.warning("记录 sent_messages 失败: %s", e)
+
+
 def push_instant(db: Database, tg: Telegram, settings: Settings, now: int | None = None) -> dict:
+    """单独推送：≥ push_instant_min 且刚抓到的（push_fresh_hours 内）。免打扰时段只推 ≥ quiet_override 的。
+    分数在 push_threshold 和 push_instant_min 之间的交给 push_bundle。"""
     now = int(time.time()) if now is None else now
+    quiet = in_quiet_hours(now, settings)
+    min_score = settings.quiet_override if quiet else max(settings.push_instant_min, settings.push_threshold)
     rows = db.query(
         "SELECT id, url, title, source, source_count, score, category, summary_zh, reason, published_at "
         "FROM news_items WHERE status = 'scored' AND score >= ? AND pushed_at IS NULL "
-        "AND published_at >= ? ORDER BY score DESC, source_count DESC, published_at DESC LIMIT ?",
-        [settings.push_threshold, now - settings.push_max_age_hours * 3600, settings.push_max_per_run],
+        "AND published_at >= ? AND fetched_at >= ? "
+        "ORDER BY score DESC, source_count DESC, published_at DESC LIMIT ?",
+        [min_score, now - settings.push_max_age_hours * 3600, now - settings.push_fresh_hours * 3600,
+         settings.push_max_per_run],
     )
     pushed = 0
     for r in rows:
         if tg.send(format_item(r, now=now), reply_markup=feedback_keyboard(r["id"])):
             db.execute("UPDATE news_items SET pushed_at = ? WHERE id = ?", [now, r["id"]])
+            record_sent(db, tg.last_message_ids, r["id"], "push", now)
             pushed += 1
-    return {"pushed": pushed}
+    return {"pushed": pushed, **({"quiet": True} if quiet else {})}
 
 
 # ---------------- 话题盯梢 ----------------
@@ -341,8 +380,10 @@ def watch_matches(keywords: list[str], text: str) -> bool:
 
 def push_watches(db: Database, tg: Telegram, settings: Settings, now: int | None = None) -> dict:
     """盯梢：已打分、还没推送、在盯梢创建之后入库的条目，命中关键词就推送，不管分数到没到推送阈值。
-    放在 push_instant 之后跑：已经按分数推过的不会再推一次。"""
+    放在 push_instant 之后跑：已经按分数推过的不会再推一次。免打扰时段不推，攒到早上。"""
     now = int(time.time()) if now is None else now
+    if in_quiet_hours(now, settings):
+        return {"watches": "quiet"}
     try:
         watches = db.query("SELECT id, name, keywords, created_at FROM watches WHERE expires_at > ?", [now])
     except Exception as e:
@@ -375,9 +416,107 @@ def push_watches(db: Database, tg: Telegram, settings: Settings, now: int | None
         head = "👀 <b>盯梢</b> · " + "、".join(esc(w["name"]) for w in matched)
         if tg.send(head + "\n" + format_item(r, now=now), reply_markup=feedback_keyboard(r["id"])):
             db.execute("UPDATE news_items SET pushed_at = ? WHERE id = ?", [now, r["id"]])
+            record_sent(db, tg.last_message_ids, r["id"], "watch", now)
             pushed += 1
             for w in matched:
                 hits[w["id"]] += 1
     for wid, n in hits.items():
         db.execute("UPDATE watches SET hits = hits + ?, last_hit_at = ? WHERE id = ?", [n, now, wid])
     return {"watches": len(watches), "watch_pushed": pushed}
+
+
+# ---------------- 快讯合集 ----------------
+
+def _get_state(db: Database, key: str) -> str | None:
+    rows = db.query("SELECT value FROM app_state WHERE key = ?", [key])
+    return rows[0]["value"] if rows else None
+
+
+def _set_state(db: Database, key: str, value: str, now: int) -> None:
+    db.execute(
+        "INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        [key, value, now],
+    )
+
+
+def _digest_pending(db: Database, settings: Settings, now: int) -> bool:
+    """今天的日报到点了但还没发：这时先别发合集，免得和日报内容重复（日报发出后会把 Top N 标记为已推送）。"""
+    local = datetime.fromtimestamp(now, MYT)
+    if local.hour < settings.digest_hour_myt:
+        return False
+    rows = db.query("SELECT sent_at FROM digests WHERE date = ?", [local.date().isoformat()])
+    return not (rows and rows[0]["sent_at"])
+
+
+def format_bundle(rows: list[dict], extra: int) -> str:
+    lines = [f"📋 <b>快讯合集</b> · {len(rows) + extra} 条", ""]
+    for i, r in enumerate(rows, 1):
+        src = esc(r.get("source") or "")
+        if (r.get("source_count") or 1) > 1:
+            src += f" · {r['source_count']} 个来源"
+        lines.append(f"{i}. <b>{r['score']:g}</b> <a href=\"{esc(r['url'])}\">{esc(r['title'])}</a>")
+        lines.append(f"    {esc(r.get('summary_zh') or '')}（{src}）")
+    if extra:
+        lines += ["", f"<i>另有 {extra} 条分数较低的没列出，可以在对话里搜</i>"]
+    lines += ["", "<i>回复这条消息说「展开第 N 条」看详细解读</i>"]
+    return "\n".join(lines)
+
+
+def push_bundle(db: Database, tg: Telegram, settings: Settings, now: int | None = None) -> dict:
+    """把 push_threshold 以上、没单独推送的条目攒起来，每 bundle_interval_hours 发一条合集。
+    免打扰时段不发；日报到点未发时先等日报。"""
+    now = int(time.time()) if now is None else now
+    if in_quiet_hours(now, settings):
+        return {"bundle": "quiet"}
+    last = int(_get_state(db, "bundle_last") or 0)
+    # 流水线每 30 分钟一次、启动时间有抖动，留 10 分钟余量
+    if now - last < settings.bundle_interval_hours * 3600 - 600:
+        return {"bundle": "not_yet"}
+    if _digest_pending(db, settings, now):
+        return {"bundle": "wait_digest"}
+    rows = db.query(
+        "SELECT id, url, title, source, source_count, score, summary_zh FROM news_items "
+        "WHERE status = 'scored' AND score >= ? AND pushed_at IS NULL AND published_at >= ? "
+        "ORDER BY score DESC, source_count DESC, published_at DESC LIMIT 200",
+        [settings.push_threshold, now - settings.push_max_age_hours * 3600],
+    )
+    if not rows:
+        return {"bundle": 0}
+    shown, extra = rows[: settings.bundle_max_items], len(rows) - settings.bundle_max_items
+    if not tg.send(format_bundle(shown, max(0, extra))):
+        return {"bundle": "send_failed"}
+    record_sent(db, tg.last_message_ids, None, "bundle", now)
+    # 没列出的也标记为已推送：否则会一直滚进下一份合集；它们仍在日报 / 搜索里
+    for chunk in chunked([r["id"] for r in rows], 90):
+        db.execute(f"UPDATE news_items SET pushed_at = ? WHERE id IN ({','.join('?' * len(chunk))})", [now, *chunk])
+    _set_state(db, "bundle_last", str(now), now)
+    return {"bundle": len(rows)}
+
+
+# ---------------- 自动清理 ----------------
+
+def cleanup_messages(db: Database, tg: Telegram, settings: Settings, now: int | None = None) -> dict:
+    """删除 cleanup_after_hours 之前的推送消息。收藏过或点过 👍/👎 的单条推送保留。
+    Telegram 只允许删 48 小时内的消息，更早的只从表里移除。"""
+    now = int(time.time()) if now is None else now
+    if settings.cleanup_after_hours <= 0:
+        return {}
+    try:
+        rows = db.query(
+            "SELECT s.message_id, s.sent_at, s.kind, f.item_id AS fb FROM sent_messages s "
+            "LEFT JOIN feedback f ON f.item_id = s.item_id WHERE s.sent_at < ? LIMIT 500",
+            [now - settings.cleanup_after_hours * 3600],
+        )
+    except Exception as e:
+        log.warning("读取 sent_messages 失败: %s", e)
+        return {}
+    if not rows:
+        return {"deleted": 0}
+    deletable = [r["message_id"] for r in rows
+                 if r["sent_at"] >= now - 47 * 3600 and not (r["kind"] != "bundle" and r["fb"] is not None)]
+    if deletable and not tg.delete_messages(deletable):
+        return {"deleted": 0, "delete_failed": len(deletable)}  # 下次再试
+    for chunk in chunked([r["message_id"] for r in rows], 90):
+        db.execute(f"DELETE FROM sent_messages WHERE message_id IN ({','.join('?' * len(chunk))})", list(chunk))
+    return {"deleted": len(deletable), "kept": len(rows) - len(deletable)}

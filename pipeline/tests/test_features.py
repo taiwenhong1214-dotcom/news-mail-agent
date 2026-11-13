@@ -51,7 +51,7 @@ def test_old_feedback_is_ignored(env):
 def test_push_has_feedback_buttons(env):
     s, db, rules = env
     ingest(db, [make_item("https://x.com/a", "Important cloud outage hits region")], s, rules, now=NOW)
-    score_pending(db, FakeLLM(scores={"Important cloud outage hits region": 8}), s, now=NOW)
+    score_pending(db, FakeLLM(scores={"Important cloud outage hits region": 9}), s, now=NOW)
     tg = FakeTG()
     push_instant(db, tg, s, now=NOW)
     iid = _ids(db)["Important cloud outage hits region"]

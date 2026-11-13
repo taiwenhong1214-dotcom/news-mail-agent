@@ -10,7 +10,7 @@ from nma.llm import LLMError
 from nma.news import prefilter
 from nma.news.fetch import Item
 from nma.news.normalize import canonicalize_url, url_hash
-from nma.news.pipeline import ingest, merge_events, push_instant, score_pending
+from nma.news.pipeline import ingest, merge_events, push_bundle, push_instant, score_pending
 from nma.news.simhash import simhash
 from nma.settings import Settings
 
@@ -60,10 +60,17 @@ class FakeTG:
     def __init__(self):
         self.messages = []
         self.markups = []
+        self.last_message_ids = []
+        self.deleted = []
 
     def send(self, text, preview=False, reply_markup=None):
         self.messages.append(text)
         self.markups.append(reply_markup)
+        self.last_message_ids = [1000 + len(self.messages)]
+        return True
+
+    def delete_messages(self, ids):
+        self.deleted.extend(ids)
         return True
 
 
@@ -175,9 +182,12 @@ def test_merge_events_keeps_pushed_primary(env):
     assert rows["https://x.com/b"]["cluster_id"] == pa["id"]
     assert rows["https://x.com/b2"]["cluster_id"] == pa["id"]            # b 的重复也跟过来
     assert rows["https://x.com/c"]["status"] == "scored"
+    db.execute("INSERT INTO digests (date, content_md, created_at, sent_at) VALUES ('2026-11-13', '', 0, 1)")
     tg = FakeTG()
-    push_instant(db, tg, s, now=NOW)
-    assert len(tg.messages) == 1 and "x.com/c" in tg.messages[0]         # b 不会再推
+    push_instant(db, tg, s, now=NOW)                                      # 7 分不单独推
+    push_bundle(db, tg, s, now=NOW)
+    assert len(tg.messages) == 1 and "x.com/c" in tg.messages[0]         # 合集里只有 c，b 不会再推
+    assert "x.com/b" not in tg.messages[0]
 
 
 def test_merge_events_bad_output_is_noop(env):

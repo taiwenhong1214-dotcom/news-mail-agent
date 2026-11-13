@@ -52,22 +52,46 @@ class Telegram:
         self.chat_id = chat_id
         self.dry_run = dry_run or not (bot_token and chat_id)
         if not self.dry_run:
-            self.url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            self.api = f"https://api.telegram.org/bot{bot_token}"
+            self.url = f"{self.api}/sendMessage"
             self.client = httpx.Client(timeout=20.0)
         self.sent = 0
+        self.last_message_ids: list[int] = []  # 上一次 send 发出的消息 id（自动清理用）
 
     def send(self, text: str, preview: bool = False, reply_markup: dict | None = None) -> bool:
         ok = True
+        self.last_message_ids = []
         parts = split_message(text)
         for i, part in enumerate(parts):
             # 按钮只挂在最后一段上
             ok = self._send_one(part, preview, reply_markup if i == len(parts) - 1 else None) and ok
         return ok
 
+    def delete_messages(self, message_ids: list[int]) -> bool:
+        """批量删除 bot 自己发的消息（Telegram 只允许删 48 小时内的）。找不到的 id 会被跳过。"""
+        if not message_ids:
+            return True
+        if self.dry_run:
+            print(f"----- [telegram dry-run] delete {len(message_ids)} messages -----")
+            return True
+        ok = True
+        for i in range(0, len(message_ids), 100):  # deleteMessages 每次最多 100 个
+            try:
+                r = self.client.post(f"{self.api}/deleteMessages",
+                                     json={"chat_id": self.chat_id, "message_ids": message_ids[i : i + 100]})
+                ok = r.status_code == 200 and ok
+                if r.status_code != 200:
+                    log.warning("telegram 删除消息失败: HTTP %s", r.status_code)
+            except httpx.HTTPError as e:
+                log.warning("telegram 删除消息网络错误: %s", type(e).__name__)
+                ok = False
+        return ok
+
     def _send_one(self, text: str, preview: bool, reply_markup: dict | None = None) -> bool:
         if self.dry_run:
             print("----- [telegram dry-run] -----\n" + text)
             self.sent += 1
+            self.last_message_ids.append(-self.sent)  # dry-run 没有真 id，用负数占位
             return True
         body = {
             "chat_id": self.chat_id,
@@ -86,6 +110,10 @@ class Telegram:
                 continue
             if r.status_code == 200:
                 self.sent += 1
+                try:
+                    self.last_message_ids.append(int(r.json()["result"]["message_id"]))
+                except (ValueError, KeyError, TypeError):
+                    pass
                 return True
             if r.status_code == 429:
                 wait = (r.json().get("parameters") or {}).get("retry_after", 5)

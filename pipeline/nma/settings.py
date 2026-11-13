@@ -70,6 +70,13 @@ class Settings:
     push_threshold: float = 7.0
     push_max_per_run: int = 8
     push_max_age_hours: int = 12         # 超过这个年龄的高分条目不即时推送，只进日报
+    push_instant_min: float = 8.5        # ≥ 此分且刚抓到的单独推送；push_threshold 到这个分数之间的攒进快讯合集
+    push_fresh_hours: int = 3            # 单独推送只推这么多小时内抓到的（夜里攒下的交给日报 / 合集）
+    bundle_interval_hours: int = 3       # 快讯合集多久发一次
+    bundle_max_items: int = 15
+    quiet_hours: str = "23-8"            # MYT 免打扰时段（"off" 关闭）；期间只推 ≥ quiet_override 的
+    quiet_override: float = 9.5
+    cleanup_after_hours: int = 24        # 推送多久后自动删除（0 = 不删；Telegram 只允许删 48 小时内的）
     digest_hour_myt: int = 8
     digest_top_n: int = 10
     watch_min_score: float = 4.0         # 盯梢命中也要 ≥ 此分，挡掉软文和标题党
@@ -108,6 +115,10 @@ class Settings:
             push_threshold=_env_float("PUSH_THRESHOLD", cls.push_threshold),
             push_max_per_run=_env_int("PUSH_MAX_PER_RUN", cls.push_max_per_run),
             push_max_age_hours=_env_int("PUSH_MAX_AGE_HOURS", cls.push_max_age_hours),
+            push_instant_min=_env_float("PUSH_INSTANT_MIN", cls.push_instant_min),
+            bundle_interval_hours=_env_int("BUNDLE_INTERVAL_HOURS", cls.bundle_interval_hours),
+            quiet_hours=_env("QUIET_HOURS", cls.quiet_hours),
+            cleanup_after_hours=_env_int("CLEANUP_AFTER_HOURS", cls.cleanup_after_hours),
             digest_hour_myt=_env_int("DIGEST_HOUR_MYT", cls.digest_hour_myt),
             watch_min_score=_env_float("WATCH_MIN_SCORE", cls.watch_min_score),
             weekly_hour_myt=_env_int("WEEKLY_HOUR_MYT", cls.weekly_hour_myt),

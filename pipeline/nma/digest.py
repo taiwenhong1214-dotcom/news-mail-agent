@@ -16,15 +16,19 @@ def myt_date(ts: int) -> str:
     return datetime.fromtimestamp(ts, MYT).date().isoformat()
 
 
-def build_digest(db: Database, settings: Settings, now: int) -> str:
-    since = now - 24 * 3600
-    date = myt_date(now)
-    rows = db.query(
+def _digest_rows(db: Database, now: int) -> list[dict]:
+    return db.query(
         "SELECT id, url, title, source, source_count, score, category, summary_zh "
         "FROM news_items WHERE status = 'scored' AND published_at >= ? "
         "ORDER BY score DESC, source_count DESC, published_at DESC LIMIT 300",
-        [since],
+        [now - 24 * 3600],
     )
+
+
+def build_digest(db: Database, settings: Settings, now: int) -> str:
+    since = now - 24 * 3600
+    date = myt_date(now)
+    rows = _digest_rows(db, now)
     counts = {
         r["status"]: r["n"]
         for r in db.query(
@@ -88,5 +92,10 @@ def maybe_send_digest(db: Database, tg: Telegram, settings: Settings,
     )
     if tg.send(content):
         db.execute("UPDATE digests SET sent_at = ? WHERE date = ?", [now, date])
+        # 日报里的 Top N 算已经送达：夜里攒下的这些不会再进早上的快讯合集
+        top = [r["id"] for r in _digest_rows(db, now)[: settings.digest_top_n]]
+        if top:
+            db.execute(f"UPDATE news_items SET pushed_at = ? WHERE pushed_at IS NULL AND id IN ({','.join('?' * len(top))})",
+                       [now, *top])
         return {"digest": "sent"}
     return {"digest": "send_failed"}

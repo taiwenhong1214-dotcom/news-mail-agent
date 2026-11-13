@@ -71,6 +71,10 @@ jobs:
           PUSH_MAX_AGE_HOURS: ${{ vars.PUSH_MAX_AGE_HOURS }}
           DIGEST_HOUR_MYT: ${{ vars.DIGEST_HOUR_MYT }}
           WATCH_MIN_SCORE: ${{ vars.WATCH_MIN_SCORE }}
+          PUSH_INSTANT_MIN: ${{ vars.PUSH_INSTANT_MIN }}
+          BUNDLE_INTERVAL_HOURS: ${{ vars.BUNDLE_INTERVAL_HOURS }}
+          QUIET_HOURS: ${{ vars.QUIET_HOURS }}
+          CLEANUP_AFTER_HOURS: ${{ vars.CLEANUP_AFTER_HOURS }}
           WEEKLY_HOUR_MYT: ${{ vars.WEEKLY_HOUR_MYT }}
         run: |
           set +e
