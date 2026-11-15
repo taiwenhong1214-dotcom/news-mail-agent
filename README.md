@@ -15,7 +15,7 @@ config/feeds.yaml + D1 动态信源
         │
         ├─ URL 判重（规范化 URL 的 hash + D1 UNIQUE）
         ├─ SimHash 判重（标题，汉明距离 ≤ 3，24h 内）→ 合并为"N 个来源报道"
-        ├─ 预筛（config/filters.yaml：黑名单 / 广告模式 / 分组白名单 / 标题长度）
+        ├─ 预筛（config/filters.yaml：黑名单 / 广告模式 / 分组标题黑名单 / 分组白名单 / 标题长度）
         ▼
 LLM 打分（10 条一批，prompts/score.md）→ score / 分类 / 中文摘要 / 理由
         ▼
@@ -169,7 +169,7 @@ npx wrangler dev --local          # 本地启动；密钥写在 worker/.dev.vars
 | 想改什么 | 改哪里 |
 |---|---|
 | 信源 | `config/feeds.yaml`。`tier: T1/T2` 是信源权重；`original_link: true` 用于聚合站，从摘要里取原文链接；也支持 `rsshub:/路由` |
-| 过滤词 | `config/filters.yaml`。`block` 是全局黑名单，`require_any` 是分组白名单 |
+| 过滤词 | `config/filters.yaml`。`block` 是全局黑名单，`block_title` 是分组标题黑名单（如游戏分组挡攻略 / 折扣 / 播客），`require_any` 是分组白名单 |
 | 打分标准、读者画像、招聘信息抽取 | `prompts/score.md` |
 | 怎样算"同一事件" | `prompts/events.md` |
 | 周报的大事和趋势 | `prompts/weekly.md` |

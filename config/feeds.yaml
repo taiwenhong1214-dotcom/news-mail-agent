@@ -95,3 +95,16 @@ groups:
       - { name: "Google News: Bursa tech stocks", url: "https://news.google.com/rss/search?q=Bursa+Malaysia+(technology+OR+tech+OR+semiconductor)+stocks+when:2d&hl=en-MY&gl=MY&ceid=MY:en", tier: T2 }
       # 只要主流财经媒体：不加 site: 限制时，一半以上是美国地方台和转载站
       - { name: "Google News: US tech stocks", url: "https://news.google.com/rss/search?q=(Nvidia+OR+Microsoft+OR+Apple+OR+Alphabet+OR+Amazon+OR+Meta+OR+Tesla)+stock+(site:reuters.com+OR+site:cnbc.com+OR+site:bloomberg.com+OR+site:wsj.com+OR+site:ft.com)+when:1d&hl=en-US&gl=US&ceid=US:en", tier: T2 }
+
+  games:
+    name: 游戏
+    # 只要大作、争议、爆款和行业大事：靠 score.md 的游戏规则压分，filters.yaml 的 block_title 挡攻略 / 折扣 / 栏目。
+    # 没选 IGN / Kotaku（影视八卦和折扣多）、PC Gamer / Eurogamer（评论和盘点多）
+    feeds:
+      # 行业：裁员、收购、财报、销量、监管、平台政策
+      - { name: GamesIndustry.biz, url: "https://www.gamesindustry.biz/feed", tier: T1 }
+      - { name: Game Developer, url: "https://www.gamedeveloper.com/rss.xml", tier: T1 }
+      # 主流游戏新闻
+      - { name: VGC, url: "https://www.videogameschronicle.com/feed/", tier: T2 }
+      - { name: GameSpot News, url: "https://www.gamespot.com/feeds/news/", tier: T2 }
+      - { name: The Verge Games, url: "https://www.theverge.com/rss/games/index.xml", tier: T2 }

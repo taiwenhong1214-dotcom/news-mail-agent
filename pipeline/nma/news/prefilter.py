@@ -1,4 +1,4 @@
-"""不调用 LLM 的预筛：标题长度、黑名单、广告模式、分组白名单。"""
+"""不调用 LLM 的预筛：标题长度、黑名单、广告模式、分组标题黑名单、分组白名单。"""
 from __future__ import annotations
 
 import re
@@ -25,22 +25,28 @@ class FilterRules:
     max_len: int = 300
     block: re.Pattern | None = None
     ad_patterns: list[re.Pattern] = field(default_factory=list)
+    title_block: dict[str, re.Pattern] = field(default_factory=dict)
     require_any: dict[str, re.Pattern] = field(default_factory=dict)
+
+
+def _group_patterns(section: dict | None) -> dict[str, re.Pattern]:
+    out = {}
+    for group, words in (section or {}).items():
+        pat = _keyword_pattern(words or [])
+        if pat:
+            out[group] = pat
+    return out
 
 
 def build_rules(cfg: dict, muted_words: list[str] = ()) -> FilterRules:
     title_cfg = cfg.get("title") or {}
-    require = {}
-    for group, words in (cfg.get("require_any") or {}).items():
-        pat = _keyword_pattern(words or [])
-        if pat:
-            require[group] = pat
     return FilterRules(
         min_len=int(title_cfg.get("min_len", 8)),
         max_len=int(title_cfg.get("max_len", 300)),
         block=_keyword_pattern([*(cfg.get("block") or []), *muted_words]),
         ad_patterns=[re.compile(p) for p in (cfg.get("ad_patterns") or [])],
-        require_any=require,
+        title_block=_group_patterns(cfg.get("block_title")),
+        require_any=_group_patterns(cfg.get("require_any")),
     )
 
 
@@ -59,6 +65,11 @@ def check(title: str, summary: str, group: str, rules: FilterRules) -> str | Non
     for p in rules.ad_patterns:
         if p.search(t):
             return "ad_pattern"
+    tb = rules.title_block.get(group)
+    if tb:
+        m = tb.search(t)
+        if m:
+            return f"title_block:{m.group(0).lower()}"
     req = rules.require_any.get(group)
     if req and not req.search(text):
         return "no_required_keyword"

@@ -8,7 +8,7 @@
 | 2 | 邮件（Gmail / Outlook） | ⏸ 暂不做 |
 | 3 | 对话 Worker（Cloudflare Workers + function calling） | ✅ 完成 |
 
-已确认的决定：公开仓库、每 30 分钟一次；LLM 用 Gemini（OpenAI 兼容接口）；实时搜索用 Tavily；领域共 10 组（见 `config/feeds.yaml`）。
+已确认的决定：公开仓库、每 30 分钟一次；LLM 用 Gemini（OpenAI 兼容接口）；实时搜索用 Tavily；领域共 11 组（见 `config/feeds.yaml`；「游戏」组只要大作、争议、爆款和行业大事，靠 `score.md` 的游戏专用标准压分 + `filters.yaml` 的 `block_title` 挡攻略和折扣）。
 
 ## 1. 架构
 

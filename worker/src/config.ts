@@ -10,6 +10,7 @@ export const GROUPS: Record<string, string> = {
   trends: "世界趋势",
   finance: "金融",
   stocks: "马股美股科技",
+  games: "游戏",
 };
 
 export const MAX_HISTORY_TURNS = 20;   // 对话历史保留轮数（一问一答为一轮）

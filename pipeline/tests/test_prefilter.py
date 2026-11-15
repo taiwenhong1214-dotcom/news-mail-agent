@@ -34,3 +34,15 @@ def test_ad_pattern_and_require_any():
     assert check("Weather in KL will be sunny tomorrow", "summary", "my-jobs", r) == "no_required_keyword"
     assert check("Weather in KL will be sunny tomorrow", "", "devops", r) is None
     assert check("某公司宣布在吉隆坡扩张业务", "将招聘 300 人", "my-jobs", r) is None
+
+
+def test_block_title_only_applies_to_its_group_and_title():
+    r = build_rules({"block_title": {"games": ["guide:", "podcast", "how to get"]}})
+    assert check("Guide: 13 PS5 games coming out next week", "", "games", r) == "title_block:guide:"
+    assert check("Podcast: PlayStation's live service era", "", "games", r) == "title_block:podcast"
+    assert check("GTA 6: how to get the Cheetah early", "", "games", r) == "title_block:how to get"
+    # 只看标题：摘要里顺带提到不算；其他分组不受影响
+    assert check("Ubisoft closes Toronto studio", "said on its podcast", "games", r) is None
+    assert check("Podcast: Kubernetes 1.36 deep dive", "", "devops", r) is None
+    # "guide:" 带冒号，guidelines 不会命中
+    assert check("Steam updates content guidelines for AI games", "", "games", r) is None

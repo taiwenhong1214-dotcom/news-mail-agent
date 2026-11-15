@@ -27,6 +27,33 @@ ad_patterns:
   - "(?i)\\b(webinar|register now|sign up today|free trial)\\b"
   - "(?i)\\b\\d+% off\\b"
 
+# 分组标题黑名单：只对该分组生效，只匹配标题（摘要里顺带提到不算）
+block_title:
+  games:
+    # 攻略 / 教程
+    - "guide:"
+    - walkthrough
+    - "how to get"
+    - "how to beat"
+    - "how to unlock"
+    - "where to find"
+    - "tips and tricks"
+    - "patch notes"
+    # 栏目 / 互动 / 盘点
+    - "podcast:"
+    - "poll:"
+    - "talking point"
+    - "what we've been playing"
+    - "what are you playing"
+    - "the big question"
+    - "quiz"
+    # 折扣 / 购物（"on sale" / "price drop" 这类不放：「Switch 2 在大马开卖」「PS5 降价」是新闻）
+    - "save on"
+    - "preorder deal"
+    - "pre-order deal"
+    - "black friday deal"
+    - "cyber monday deal"
+
 # 分组白名单：列了词的分组，条目必须命中至少一个才放行；没列（或为空）的分组不限制
 require_any:
   my-jobs:
