@@ -94,6 +94,8 @@ def test_watch_matching_rules():
     assert watch_matches(["ai"], "New AI chip")
     assert watch_matches(["谷歌 数据中心"], "谷歌在柔佛建数据中心")           # 中文按子串，组内全部命中
     assert not watch_matches(["谷歌 数据中心"], "谷歌发布新手机")
+    assert watch_matches(["谷歌、马来西亚，数据中心"], "谷歌在马来西亚建数据中心")  # 顿号 / 逗号也当分隔符
+    assert not watch_matches(["谷歌、马来西亚、数据中心"], "谷歌发布新手机")
 
 
 def _add_watch(db, name, keywords, created_at):

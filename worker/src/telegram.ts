@@ -1,4 +1,4 @@
-import { escapeHtml } from "./util";
+import { escapeHtml, htmlToText } from "./util";
 
 const MAX_LEN = 4000; // Telegram 上限 4096，留余量
 
@@ -12,10 +12,12 @@ export function mdToTelegramHtml(md: string): string {
   const hold = (html: string) => `\u0000${slots.push(html) - 1}\u0000`;
 
   let s = md.replace(/```[a-zA-Z0-9_-]*\n?([\s\S]*?)```/g, (_m, code) => hold(`<pre>${escapeHtml(code.replace(/\n$/, ""))}</pre>`));
-  s = s.replace(/`([^`\n]+)`/g, (_m, code) => hold(`<code>${escapeHtml(code)}</code>`));
-  s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, text, url) =>
-    hold(`<a href="${escapeHtml(url).replace(/"/g, "&quot;")}">${escapeHtml(text.replace(/\*\*/g, ""))}</a>`),
+  // 链接在行内代码之前处理：链接文字里的 `code` 直接去掉反引号，不产生嵌套占位符。
+  // URL 允许一层成对括号（维基百科的 Foo_(bar) 这类）
+  s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g, (_m, text, url) =>
+    hold(`<a href="${escapeHtml(url).replace(/"/g, "&quot;")}">${escapeHtml(text.replace(/\*\*|`/g, ""))}</a>`),
   );
+  s = s.replace(/`([^`\n]+)`/g, (_m, code) => hold(`<code>${escapeHtml(code)}</code>`));
 
   s = escapeHtml(s);
   s = s.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
@@ -23,7 +25,26 @@ export function mdToTelegramHtml(md: string): string {
   s = s.replace(/__([^_\n]+?)__/g, "<b>$1</b>");
   s = s.replace(/^(\s*)[-*]\s+/gm, "$1• ");
 
-  return s.replace(/\u0000(\d+)\u0000/g, (_m, i) => slots[Number(i)]);
+  // 递归还原：万一占位符里还套着占位符，也不会把 \u0000 漏到消息里
+  const restore = (t: string): string => t.replace(/\u0000(\d+)\u0000/g, (_m, i) => restore(slots[Number(i)] ?? ""));
+  return restore(s);
+}
+
+const MD_CHUNK = 3500; // 转成 HTML 后会变长（链接、转义），留出余量
+
+/**
+ * 长 Markdown 先按行切段，每段单独转 HTML、单独发：不会把 HTML 标签切成两半，
+ * 某一段解析失败也只需要把那一段改发纯文本。代码块被切开时在切口两边补上 ```。
+ */
+export function splitMarkdown(md: string, limit = MD_CHUNK): string[] {
+  const parts = splitMessage(md, limit);
+  if (parts.length === 1) return parts;
+  let open = false;
+  return parts.map((part) => {
+    const startsOpen = open;
+    if ((part.match(/```/g) ?? []).length % 2 === 1) open = !open;
+    return (startsOpen ? "```\n" : "") + part + (open ? "\n```" : "");
+  });
 }
 
 /** 按行切分长消息，尽量不切断一行 */
@@ -70,9 +91,13 @@ export class Telegram {
     });
   }
 
-  /** 发送 HTML 消息；HTML 解析失败时退回纯文本 */
+  /**
+   * 发送 HTML 消息；某一段 HTML 解析失败（400）时只把这一段改发纯文本，已发出的段不重发。
+   * fallbackText 只在整条消息不用切段时使用（切段后对不上是哪一部分）。
+   */
   async sendHtml(chatId: number | string, html: string, fallbackText?: string): Promise<void> {
-    for (const part of splitMessage(html)) {
+    const parts = splitMessage(html);
+    for (const part of parts) {
       const r = await this.call("sendMessage", {
         chat_id: chatId,
         text: part,
@@ -80,17 +105,18 @@ export class Telegram {
         link_preview_options: { is_disabled: true },
       });
       if (r && r.status === 400) {
-        const plain = fallbackText ?? part.replace(/<[^>]+>/g, "");
+        const plain = parts.length === 1 && fallbackText !== undefined ? fallbackText : htmlToText(part);
         for (const p of splitMessage(plain)) {
           await this.call("sendMessage", { chat_id: chatId, text: p, link_preview_options: { is_disabled: true } });
         }
-        return;
       }
     }
   }
 
   async sendMarkdown(chatId: number | string, md: string): Promise<void> {
-    await this.sendHtml(chatId, mdToTelegramHtml(md), md);
+    for (const chunk of splitMarkdown(md)) {
+      await this.sendHtml(chatId, mdToTelegramHtml(chunk), chunk);
+    }
   }
 
   async typing(chatId: number | string): Promise<void> {

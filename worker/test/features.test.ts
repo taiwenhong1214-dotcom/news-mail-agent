@@ -154,6 +154,7 @@ describe("watch tools", () => {
       "3",
     ]);
     expect(normalizeKeywords("x")).toEqual([]);
+    expect(normalizeKeywords(["谷歌、马来西亚，数据中心", "google, johor; data"])).toEqual(["谷歌 马来西亚 数据中心", "google johor data"]);
   });
 
   it("creates a watch, rejects too-broad keywords and enforces the cap", async () => {

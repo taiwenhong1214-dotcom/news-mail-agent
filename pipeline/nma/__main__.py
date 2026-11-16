@@ -1,4 +1,4 @@
-"""入口：python -m nma [all|fetch|score|merge|push|digest|weekly] [--force-digest] [--force-weekly] [--dry-run] [--sqlite]"""
+"""入口：python -m nma [all|fetch|score|merge|digest|push|weekly|prune] [--force-digest] [--force-weekly] [--dry-run] [--sqlite]"""
 from __future__ import annotations
 
 import argparse
@@ -14,14 +14,16 @@ from .llm import LLMClient
 from .news import prefilter
 from .news.fetch import fetch_items, load_sources
 from .report import format_run_report
-from .news.pipeline import (cleanup_messages, ingest, load_muted, merge_events, push_bundle, push_instant,
-                            push_watches, score_pending)
+from .news.pipeline import (cleanup_messages, ingest, load_muted, merge_due, merge_events, prune_db, push_bundle,
+                            push_instant, push_watches, score_pending)
 from .settings import Settings
 from .telegram import Telegram
 
 log = logging.getLogger("nma")
 
-STAGES = ("fetch", "score", "merge", "push", "digest", "weekly")
+# digest 在 push 前面：早上到点先发日报（Top N 标记为已推送），push 再推剩下的，
+# 不会把日报里的条目先单独推一遍，快讯合集也不用等到下一轮
+STAGES = ("fetch", "score", "merge", "digest", "push", "weekly", "prune")
 
 
 def _make_llm(settings: Settings) -> LLMClient:
@@ -102,8 +104,8 @@ def main(argv: list[str] | None = None) -> int:
                 st["tokens"] = llm.usage.prompt_tokens + llm.usage.completion_tokens
                 st["model"] = llm.model
             elif stage == "merge":
-                if args.stage == "all" and not (stats.get("score") or {}).get("scored"):
-                    st = {"skipped": "本次没有新打分的条目"}
+                if args.stage == "all" and not merge_due(db, stats.get("score")):
+                    st = {"skipped": f"本次没有新的 ≥{settings.merge_min_score:g} 分条目"}
                 else:
                     llm = llm or _make_llm(settings)
                     st = merge_events(db, llm, settings)
@@ -114,6 +116,8 @@ def main(argv: list[str] | None = None) -> int:
                 st.update(push_bundle(db, tg, settings))   # 其余 ≥7 分每 3 小时合成一条
             elif stage == "digest":
                 st = digest.maybe_send_digest(db, tg, settings, force=args.force_digest)
+            elif stage == "prune":
+                st = prune_db(db, force=args.stage == "prune")  # 平时每天一次；单独跑这个阶段时立即执行
             else:
                 def get_llm() -> LLMClient:
                     nonlocal llm

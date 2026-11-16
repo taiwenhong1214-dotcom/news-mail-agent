@@ -395,7 +395,7 @@ async function readPage(args: Args, ctx: ToolContext) {
 
 const MAX_WATCHES = 20;
 
-/** 规整关键词：小写、合并空白、去重；每组最多 4 个词 */
+/** 规整关键词：小写、合并空白、去重；每组最多 4 个词。LLM 有时用逗号 / 顿号分隔组内的词，一并当分隔符 */
 export function normalizeKeywords(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const out: string[] = [];
@@ -403,7 +403,7 @@ export function normalizeKeywords(raw: unknown): string[] {
     const terms = String(k ?? "")
       .toLowerCase()
       .replace(/["'()]/g, " ")
-      .split(/\s+/)
+      .split(/[\s,，、;；]+/)
       .filter(Boolean)
       .slice(0, 4);
     const phrase = terms.join(" ");
