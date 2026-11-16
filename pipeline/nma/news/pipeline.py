@@ -8,7 +8,7 @@ import time
 from collections import Counter
 from datetime import datetime
 
-from ..db import Database, chunked, insert_rows, select_in
+from ..db import Database, chunked, insert_rows, select_in, update_rows
 from ..digest import MYT
 from ..llm import LLMClient, LLMError, extract_groups, extract_json_items, validate_scores
 from ..settings import Settings, load_prompt
@@ -57,37 +57,44 @@ def ingest(db: Database, items: list[Item], settings: Settings, rules: prefilter
     if not new:
         return dict(stats)
 
-    # 3) SimHash 近似判重：和最近 simhash_window_hours 内的主条目 + 本批已确定的主条目比较
+    # 3) 预筛先于近似判重：被过滤的条目直接入库，不进 SimHash 索引。否则一条被白名单分组
+    #    （require_any）或广告规则挡掉的条目会当上主条目，把别的分组同标题的正式报道吞成 dup
+    rows, candidates = [], []
+    for it in new:
+        reason = prefilter.check(it.title, it.summary, it.group, rules)
+        if reason:
+            stats["filtered"] += 1
+            rows.append(_row(it, now, None, "filtered", reason))
+        else:
+            candidates.append(it)
+
+    # 4) SimHash 近似判重：和最近 simhash_window_hours 内的主条目 + 本批已确定的主条目比较
     #    （窗口比 48h 短，避免把每天重复的标题，比如"Bursa Malaysia opens higher"，跨天合并）
     since = now - settings.simhash_window_hours * 3600
     index = SimIndex(settings.simhash_distance)
     for r in db.query(
-        "SELECT id, simhash FROM news_items WHERE published_at >= ? AND cluster_id = id", [since]
+        "SELECT id, simhash FROM news_items WHERE published_at >= ? AND cluster_id = id "
+        "AND status != 'filtered'", [since]
     ):
         index.add(from_hex(r["simhash"]), ("db", r["id"]))
 
     # T1 优先、发布早的优先成为主条目（通常是首发报道）
-    new.sort(key=lambda i: (i.tier != "T1", i.published_at))
-    primaries: list[Item] = []
+    candidates.sort(key=lambda i: (i.tier != "T1", i.published_at))
     dups: list[tuple[Item, tuple[str, object]]] = []
-    for it in new:
+    for it in candidates:
         key = index.find(it.simhash) if it.published_at >= since else None
         if key is not None:
             dups.append((it, key))
         else:
-            primaries.append(it)
+            stats["pending"] += 1
+            rows.append(_row(it, now, None, "pending", None))
             index.add(it.simhash, ("new", it.url_hash))
 
-    # 4) 主条目预筛 + 入库
-    rows = []
-    for it in primaries:
-        reason = prefilter.check(it.title, it.summary, it.group, rules)
-        stats["filtered" if reason else "pending"] += 1
-        rows.append(_row(it, now, None, "filtered" if reason else "pending", reason))
+    # 5) 主条目（含被过滤的）入库
     insert_rows(db, "news_items", INSERT_COLUMNS, rows)
     db.execute("UPDATE news_items SET cluster_id = id WHERE cluster_id IS NULL")
 
-    # 5) 重复条目入库，挂到主条目下，并给主条目 source_count +1
+    # 6) 重复条目入库，挂到主条目下，并给主条目 source_count +1
     if dups:
         new_ids = {
             r["url_hash"]: r["id"]
@@ -177,19 +184,21 @@ def score_pending(db: Database, llm: LLMClient, settings: Settings, now: int | N
 
         fallback = {r["id"]: group_names.get(r["feed_group"], "其他") for r in batch}
         results = validate_scores(extract_json_items(text), ids, categories, fallback)
-        for iid, res in results.items():
-            db.execute(
-                "UPDATE news_items SET status = 'scored', score = ?, category = ?, summary_zh = ?, "
-                "reason = ?, jobs = ?, llm_attempts = llm_attempts + 1 WHERE id = ?",
-                [res["score"], res["category"], res["summary_zh"], res["reason"],
-                 json.dumps(res["jobs"], ensure_ascii=False) if res.get("jobs") else None, iid],
-            )
+        # 一批合成一两条 UPDATE：D1 每条语句是一次 HTTPS 往返，逐条更新 80 条要多花十几秒
+        update_rows(
+            db, "news_items", "id", ("score", "category", "summary_zh", "reason", "jobs"),
+            [(iid, res["score"], res["category"], res["summary_zh"], res["reason"],
+              json.dumps(res["jobs"], ensure_ascii=False) if res.get("jobs") else None)
+             for iid, res in results.items()],
+            extra_set="status = 'scored', llm_attempts = llm_attempts + 1",
+        )
         missing = ids - results.keys()
         if missing:
             log.warning("LLM 结果缺失或无法解析 %d/%d 条，下次重试", len(missing), len(ids))
             _mark_failed(db, missing)
         stats["scored"] += len(results)
         stats["pushable"] += sum(1 for r in results.values() if r["score"] >= settings.push_threshold)
+        stats["merge_candidates"] += sum(1 for r in results.values() if r["score"] >= settings.merge_min_score)
         stats["parse_failed"] += len(missing)
 
     if stats["llm_errors"] and not stats["scored"]:
@@ -229,6 +238,25 @@ def preference_section(db: Database, settings: Settings, now: int) -> str:
     return "\n".join(lines)
 
 
+MERGE_RETRY_KEY = "merge_retry"
+
+
+def merge_due(db: Database, score_stats: dict | None) -> bool:
+    """本轮打出了 ≥ merge_min_score 的新条目，或者上次合并因 LLM 不可用跳过了，才需要再合并。
+    否则候选集和上次一样，再发给 LLM 只是白花额度。"""
+    if (score_stats or {}).get("merge_candidates"):
+        return True
+    try:
+        return _get_state(db, MERGE_RETRY_KEY) == "1"
+    except Exception as e:
+        log.warning("读取 app_state 失败: %s", e)
+        return False
+
+
+def _clear_merge_retry(db: Database) -> None:
+    db.execute("DELETE FROM app_state WHERE key = ?", [MERGE_RETRY_KEY])
+
+
 def merge_events(db: Database, llm: LLMClient, settings: Settings, now: int | None = None) -> dict:
     """LLM 事件合并：SimHash 只能合并标题几乎相同的报道；同一事件的不同角度报道
     （"CEO 辞职" / "股价因此下跌" / "分析师点评"）交给 LLM 分组，每组只保留一条主条目。"""
@@ -240,6 +268,7 @@ def merge_events(db: Database, llm: LLMClient, settings: Settings, now: int | No
         [settings.merge_min_score, now - 24 * 3600, settings.merge_max_items],
     )
     if len(rows) < 2:
+        _clear_merge_retry(db)
         return {"candidates": len(rows), "merged": 0}
 
     by_id = {r["id"]: r for r in rows}
@@ -250,9 +279,12 @@ def merge_events(db: Database, llm: LLMClient, settings: Settings, now: int | No
     try:
         text = llm.chat([{"role": "user", "content": prompt}])
     except LLMError as e:
-        # 合并只是锦上添花：没合并顶多同一事件多推一条，24 小时内的条目下次运行还会再合并，不用告警
+        # 合并只是锦上添花：没合并顶多同一事件多推一条，不用告警。记个标记，
+        # 下次运行即使没有新的高分条目也重试一次（见 merge_due）
         log.warning("事件合并跳过: %s", e)
+        _set_state(db, MERGE_RETRY_KEY, "1", now)
         return {"candidates": len(rows), "merged": 0, "skipped": "LLM 不可用"}
+    _clear_merge_retry(db)
     groups = extract_groups(text, set(by_id))
 
     merged = 0
@@ -377,11 +409,14 @@ def _term_hit(term: str, text: str) -> bool:
     return term in text
 
 
+_TERM_SEP = re.compile(r"[\s,，、;；]+")
+
+
 def watch_matches(keywords: list[str], text: str) -> bool:
-    """keywords 里任一组命中即可；一组里空格分隔的词必须全部出现。"""
+    """keywords 里任一组命中即可；一组里空格（或逗号、顿号、分号）分隔的词必须全部出现。"""
     text = text.lower()
     for phrase in keywords:
-        terms = [t for t in str(phrase).lower().split() if t]
+        terms = [t for t in _TERM_SEP.split(str(phrase).lower()) if t]
         if terms and all(_term_hit(t, text) for t in terms):
             return True
     return False
@@ -529,3 +564,39 @@ def cleanup_messages(db: Database, tg: Telegram, settings: Settings, now: int | 
     for chunk in chunked([r["message_id"] for r in rows], 90):
         db.execute(f"DELETE FROM sent_messages WHERE message_id IN ({','.join('?' * len(chunk))})", list(chunk))
     return {"deleted": len(deletable), "kept": len(rows) - len(deletable)}
+
+
+# 数据保留：news_fts 用 trigram 分词，体积比原表大得多，不清理的话 D1 会越涨越大。
+# 删的都是用不到的：search_news 不查 dup、最多查 90 天；收藏过 / 点过 👍👎 的永远保留。
+# 抓取只收 window_hours（48h）内发布的条目，删掉的旧条目不会被当成新的重新入库。
+PRUNE_RULES = (
+    ("filtered", "status = 'filtered'", 14),
+    ("dup", "status = 'dup' AND pushed_at IS NULL", 30),
+    ("old", "1 = 1", 180),
+)
+PRUNE_CHUNK = 2000
+
+
+def prune_db(db: Database, now: int | None = None, force: bool = False) -> dict:
+    """每天最多一次：删旧的预筛过滤 / 重复条目、半年前的新闻、30 天前的运行记录和过期的盯梢。"""
+    now = int(time.time()) if now is None else now
+    last = int(_get_state(db, "prune_last") or 0)
+    if not force and now - last < 86400:
+        return {"prune": "not_yet"}
+    out: dict = {}
+    for name, cond, days in PRUNE_RULES:
+        total = 0
+        for _ in range(20):  # 第一次跑可能积压很多：分块删，每条语句不至于太久
+            n = db.execute(
+                f"DELETE FROM news_items WHERE id IN (SELECT id FROM news_items WHERE {cond} "
+                f"AND published_at < ? AND id NOT IN (SELECT item_id FROM feedback) LIMIT {PRUNE_CHUNK})",
+                [now - days * 86400],
+            )
+            total += n
+            if n < PRUNE_CHUNK:
+                break
+        out[f"pruned_{name}"] = total
+    out["pruned_runs"] = db.execute("DELETE FROM runs WHERE started_at < ?", [now - 30 * 86400])
+    out["pruned_watches"] = db.execute("DELETE FROM watches WHERE expires_at < ?", [now - 30 * 86400])
+    _set_state(db, "prune_last", str(now), now)
+    return out

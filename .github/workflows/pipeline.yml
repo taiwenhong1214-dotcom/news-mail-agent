@@ -10,7 +10,7 @@ on:
       stage:
         description: "要跑的阶段"
         type: choice
-        options: [all, fetch, score, merge, push, digest, weekly]
+        options: [all, fetch, score, merge, digest, push, weekly, prune]
         default: all
       force_digest:
         description: "立即生成并发送日报"

@@ -147,7 +147,7 @@ cp .env.example .env              # 至少填 LLM_API_KEY
 cd pipeline
 python -m pytest                  # 单元测试 + 端到端测试（SQLite + 假 LLM）
 python -m nma all --sqlite --dry-run --force-digest   # 真实抓取和打分，写本地 SQLite，消息只打印不发送
-python -m nma fetch --sqlite      # 只跑某一个阶段：fetch / score / merge / push / digest / weekly
+python -m nma fetch --sqlite      # 只跑某一个阶段：fetch / score / merge / digest / push / weekly / prune
 python -m nma weekly --sqlite --dry-run --force-weekly   # 立即生成一份周报看看
 ```
 

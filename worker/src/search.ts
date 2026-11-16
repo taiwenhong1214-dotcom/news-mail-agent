@@ -128,7 +128,16 @@ export async function webSearch(args: Args, ctx: ToolContext) {
     };
   }
   if (usage) usage.searches++;
+  // 只有 Tavily 真的返回了结果才占次数：缓存命中、额度用完、HTTP 出错、网络异常都退还
+  const charged = { value: false };
+  try {
+    return await cachedSearch(p, key, ctx, charged);
+  } finally {
+    if (usage && !charged.value) usage.searches--;
+  }
+}
 
+async function cachedSearch(p: ReturnType<typeof searchParams>, key: string, ctx: ToolContext, charged: { value: boolean }) {
   // 2) 缓存
   const ck = cacheKey(p);
   const ttl = p.time_range === "day" ? CACHE_TTL_DAY : CACHE_TTL;
@@ -136,10 +145,7 @@ export async function webSearch(args: Args, ctx: ToolContext) {
     const hit = await ctx.env.DB.prepare("SELECT result FROM search_cache WHERE key = ? AND created_at >= ?")
       .bind(ck, ctx.now - ttl)
       .first<{ result: string }>();
-    if (hit) {
-      if (usage) usage.searches--; // 缓存命中不占次数
-      return { ...JSON.parse(hit.result), cached: true };
-    }
+    if (hit) return { ...JSON.parse(hit.result), cached: true };
   } catch (e) {
     console.error("search cache read failed", e); // 表不存在（迁移没跑）时照常搜索
   }
@@ -168,6 +174,7 @@ export async function webSearch(args: Args, ctx: ToolContext) {
     return exhaustedError(q);
   }
   if (!r.ok) return { error: `Tavily HTTP ${r.status}: ${(await r.text()).slice(0, 200)}` };
+  charged.value = true;
   const data = (await r.json()) as {
     answer?: string;
     results?: { title: string; url: string; content: string; published_date?: string }[];

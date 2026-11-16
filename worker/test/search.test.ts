@@ -68,6 +68,19 @@ describe("web_search budget", () => {
     expect(searchCalls(f)).toBe(3);
   });
 
+  it("does not use the per-message budget when Tavily fails", async () => {
+    const { db } = stateDb();
+    const usage = { searches: 0 };
+    const r = await webSearch({ query: "x1" }, ctxFor(db, tavily({ searchStatus: 502 }), { searchUsage: usage }));
+    expect("error" in r).toBe(true);
+    expect(usage.searches).toBe(0);
+    const down = fakeFetch(() => Promise.reject(new Error("network down")));
+    await expect(webSearch({ query: "x2" }, ctxFor(db, down, { searchUsage: usage }))).rejects.toThrow("network down");
+    expect(usage.searches).toBe(0);
+    await webSearch({ query: "x3" }, ctxFor(db, tavily(), { searchUsage: usage }));
+    expect(usage.searches).toBe(1);
+  });
+
   it("caps real searches per message, including parallel calls", async () => {
     const { db } = stateDb();
     const f = tavily();
