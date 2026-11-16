@@ -109,7 +109,7 @@ def parse_feed(src: FeedSource, content: bytes, window_hours: int, now: float | 
         if not normalize.within_window(published, window_hours, now):
             continue
         publisher = ((e.get("source") or {}).get("title") or "").strip() or None
-        title = normalize.strip_publisher_suffix(title, publisher)
+        title = normalize.strip_section_suffix(normalize.strip_publisher_suffix(title, publisher))
         raw_summary = e.get("summary") or e.get("description") or ""
         summary = normalize.clean_text(raw_summary, SUMMARY_MAX)
         if summary == title:

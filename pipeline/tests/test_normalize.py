@@ -4,7 +4,7 @@ import pytest
 
 from nma.news.normalize import (
     canonicalize_url, clean_text, entry_timestamp, first_external_link,
-    strip_publisher_suffix, url_hash, within_window,
+    strip_publisher_suffix, strip_section_suffix, url_hash, within_window,
 )
 
 
@@ -76,3 +76,14 @@ def test_entry_timestamp_and_window():
     assert entry_timestamp({"updated_parsed": time.gmtime(now + 999)}, now) == now  # 未来 → now
     assert not within_window(now - 72 * 3600, 48, now)
     assert within_window(now - 47 * 3600, 48, now)
+
+
+def test_strip_section_suffix():
+    assert strip_section_suffix("水疗中心董事涉拖欠8.9万SST 面对12控状皆不认罪 - 国内 - 即时国内") == \
+        "水疗中心董事涉拖欠8.9万SST 面对12控状皆不认罪"
+    assert strip_section_suffix("印尼林火波及邻国 普拉博沃向马新致歉 | 国内") == "印尼林火波及邻国 普拉博沃向马新致歉"
+    assert strip_section_suffix("GDP成绩周三出炉 大马经济料延续强势 | e南洋") == "GDP成绩周三出炉 大马经济料延续强势"
+    # 不动：英文标题、没有空格的连字符、去完太短的
+    assert strip_section_suffix("Big news - Reuters") == "Big news - Reuters"
+    assert strip_section_suffix("马股扬0.34%至1588.03点") == "马股扬0.34%至1588.03点"
+    assert strip_section_suffix("快讯 - 国内") == "快讯 - 国内"

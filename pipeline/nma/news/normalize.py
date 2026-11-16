@@ -115,6 +115,20 @@ def strip_publisher_suffix(title: str, publisher: str | None) -> str:
     return title
 
 
+# 中文媒体（经 Google News）的标题常带栏目尾巴："... - 国内 - 即时国内"、"... | 财经"、"... | e南洋"。
+# 每条都带同样的几个字，会让 SimHash 把不相关的标题拉近，也占打分 prompt 的位置。
+# 只认两侧有空格的分隔符 + 不超过 6 个汉字（可带一个英文字母前缀）的短标签。
+_SECTION_SUFFIX_RE = re.compile(r"(?:\s+[-|｜]\s+[A-Za-z]?[一-鿿]{1,6})+\s*$")
+
+
+def strip_section_suffix(title: str) -> str:
+    m = _SECTION_SUFFIX_RE.search(title)
+    if not m:
+        return title
+    head = title[: m.start()].rstrip()
+    return head if len(head) >= 4 else title  # 去完太短说明不是栏目标签，保留原样
+
+
 def entry_timestamp(entry: dict, now: float | None = None) -> int:
     """取 feed 条目的发布时间（unix 秒）。没有时间的用当前时间；未来时间截到当前。"""
     now = time.time() if now is None else now
